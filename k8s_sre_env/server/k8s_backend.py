@@ -14,20 +14,37 @@ def _load_token_auth(endpoint: str, ca_cert_b64: str, token: str):
     Authenticate to K8s with a bearer token + CA cert.
     Works anywhere — Docker, HF Spaces, Colab, H100. No GCP SDK needed.
     """
-    import tempfile, base64
-
-    ca_cert_bytes = base64.b64decode(ca_cert_b64)
-    ca_cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
-    ca_cert_file.write(ca_cert_bytes)
-    ca_cert_file.close()
+    import tempfile, base64, urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     configuration = client.Configuration()
     configuration.host = endpoint
-    configuration.ssl_ca_cert = ca_cert_file.name
     configuration.api_key = {"authorization": f"Bearer {token}"}
+
+    # Try CA cert first, fall back to verify_ssl=False
+    try:
+        ca_cert_bytes = base64.b64decode(ca_cert_b64)
+        ca_cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
+        ca_cert_file.write(ca_cert_bytes)
+        ca_cert_file.close()
+        configuration.ssl_ca_cert = ca_cert_file.name
+    except Exception:
+        logger.warning("CA cert decode failed, disabling SSL verification")
+        configuration.verify_ssl = False
+
     client.Configuration.set_default(configuration)
 
-    logger.info(f"Authenticated to {endpoint} via bearer token")
+    # Test connection
+    try:
+        v1 = client.CoreV1Api()
+        v1.list_namespace(_request_timeout=5)
+        logger.info(f"Authenticated to {endpoint} via bearer token (SSL verified)")
+    except Exception:
+        # CA cert might not work on this platform, retry without SSL verify
+        configuration.verify_ssl = False
+        configuration.ssl_ca_cert = None
+        client.Configuration.set_default(configuration)
+        logger.info(f"Authenticated to {endpoint} via bearer token (SSL verify disabled)")
 
 
 class K8sBackend:

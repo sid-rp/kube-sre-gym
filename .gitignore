@@ -1,0 +1,25 @@
+# Secrets
+secrets.json
+.env
+
+# Test scripts with credentials
+test_connection.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Training artifacts
+sre_agent_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
