@@ -1,0 +1,5 @@
+name: k8s-sre-env
+version: "0.1.0"
+description: "K8s SRE Self-Improving RL Environment — agent diagnoses and fixes real GKE incidents"
+entry_point: server.app:app
+sdk_version: "0.2.1"
