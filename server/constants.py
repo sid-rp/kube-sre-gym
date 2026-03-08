@@ -83,7 +83,7 @@ HEALTHY_STATE = {
 
 # ---- Timeouts ----
 RESET_POLL_INTERVAL = 3     # seconds between health checks during reset
-RESET_MAX_POLLS = 10        # max iterations waiting for healthy pods (30s)
+RESET_MAX_POLLS = 20        # max iterations waiting for healthy pods (60s)
 INJECT_WAIT_DEFAULT = 8     # seconds to wait after fault injection
 INJECT_VISIBILITY_MAX_POLLS = 20  # max polls waiting for fault to become visible
 INJECT_VISIBILITY_INTERVAL = 3    # seconds between visibility checks

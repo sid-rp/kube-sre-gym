@@ -168,8 +168,9 @@ class KubeSreGymEnvironment(Environment):
         )
 
     def _wait_for_fault_visible(self):
-        """Poll until at least one pod shows unhealthy status."""
+        """Poll until at least one pod in the affected namespace shows unhealthy status."""
         fault_type = self.scenario.failure_type if self.scenario else ""
+        affected_ns = self.scenario.namespace if self.scenario else None
 
         # resource_quota doesn't crash existing pods, just blocks new ones
         if fault_type == "resource_quota":
@@ -178,9 +179,15 @@ class KubeSreGymEnvironment(Environment):
 
         for i in range(INJECT_VISIBILITY_MAX_POLLS):
             health = self.backend.check_health()
+            # Only check the affected namespace to avoid false positives
+            # from stale broken pods in other namespaces
+            if affected_ns and affected_ns in health:
+                check_health = {affected_ns: health[affected_ns]}
+            else:
+                check_health = health
             unhealthy = [
                 f"{ns}/{pod}"
-                for ns, pods in health.items()
+                for ns, pods in check_health.items()
                 for pod, status in pods.items()
                 if status not in ("Running", "Completed")
             ]

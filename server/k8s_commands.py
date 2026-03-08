@@ -420,11 +420,17 @@ class CommandHandler:
             return "error: deployment name required"
         try:
             deploy = self.apps_v1.read_namespaced_deployment(deploy_name, ns)
+            matched = False
+            available_containers = [c.name for c in deploy.spec.template.spec.containers]
             for c in deploy.spec.template.spec.containers:
                 if container_name is None or c.name == container_name:
                     if not c.resources:
                         c.resources = client.V1ResourceRequirements()
                     c.resources.limits = {**(c.resources.limits or {}), **limits}
+                    matched = True
+            if not matched:
+                return (f"error: container '{container_name}' not found in deployment {deploy_name}. "
+                        f"Available containers: {available_containers}")
             self.apps_v1.patch_namespaced_deployment(deploy_name, ns, deploy)
             return f"deployment.apps/{deploy_name} resource requirements updated"
         except ApiException as e:
@@ -444,9 +450,16 @@ class CommandHandler:
             return "error: deployment name required"
         try:
             deploy = self.apps_v1.read_namespaced_deployment(deploy_name, ns)
+            matched = False
+            available_containers = [c.name for c in deploy.spec.template.spec.containers]
             for c in deploy.spec.template.spec.containers:
                 if c.name in container_image:
                     c.image = container_image[c.name]
+                    matched = True
+            if not matched:
+                requested = list(container_image.keys())
+                return (f"error: container(s) {requested} not found in deployment {deploy_name}. "
+                        f"Available containers: {available_containers}")
             self.apps_v1.patch_namespaced_deployment(deploy_name, ns, deploy)
             return f"deployment.apps/{deploy_name} image updated"
         except ApiException as e:
