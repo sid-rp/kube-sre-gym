@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
         "--vllm-mode", choices=("colocate", "server"), default="colocate",
         help="vLLM mode: colocate (1 GPU) or server (separate vLLM process)",
     )
-    parser.add_argument("--vllm-server-url", default="http://localhost:8000", help="vLLM server URL (server mode)")
+    parser.add_argument("--vllm-server-url", default="http://localhost:8001", help="vLLM server URL (server mode)")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
@@ -120,6 +120,26 @@ CURRENT CLUSTER STATUS:
     return text
 
 
+def format_history(history: list[dict]) -> str:
+    """Format conversation history into a condensed summary for the agent."""
+    if not history:
+        return ""
+    lines = ["PREVIOUS COMMANDS AND RESULTS:"]
+    for entry in history:
+        cmd = entry["command"]
+        output = entry["output"]
+        reward = entry.get("reward", 0.0)
+        feedback = entry.get("feedback", "")
+        # Truncate long outputs but keep enough context
+        if len(output) > 300:
+            output = output[:300] + "... (truncated)"
+        lines.append(f"$ {cmd}")
+        lines.append(f"  Output: {output}")
+        if feedback:
+            lines.append(f"  Feedback: {feedback}")
+    return "\n".join(lines)
+
+
 def parse_commands(text: str) -> list[str]:
     """Extract kubectl/diagnose/fix commands from agent response."""
     commands = []
@@ -130,6 +150,23 @@ def parse_commands(text: str) -> list[str]:
         elif line.startswith(("- kubectl", "* kubectl", "> kubectl")):
             commands.append(line.lstrip("-*> "))
     return commands
+
+
+def apply_chat_template(tokenizer, messages):
+    """Apply chat template with fallback if enable_thinking is not supported."""
+    try:
+        return tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+            enable_thinking=False,
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False,
+        )
 
 
 # ============================================================
@@ -145,8 +182,15 @@ def rollout_once(
 ) -> dict[str, list]:
     """
     Run one full K8s incident episode.
-    Agent generates commands, environment executes them on real cluster,
-    judge scores each action.
+
+    The agent builds a conversation history across turns so it can do
+    multi-step diagnosis (triage -> investigate -> fix -> verify).
+    Each turn, the full history is included in the prompt so the agent
+    knows what it already tried.
+
+    Token accumulation: prompt_ids and completion_ids are extended across
+    turns. This matches the TRL OpenEnv pattern (see wordle example) —
+    GRPO assigns episode-level reward to the full token sequence.
     """
     result = env.reset()
     observation = result.observation
@@ -158,22 +202,28 @@ def rollout_once(
     diagnosis_rewards: list[float] = []
     fix_rewards: list[float] = []
 
+    # Conversation history — agent needs this to avoid repeating commands
+    # and to build on previous investigation results
+    conversation_history: list[dict] = []
+
     for _turn in range(max_turns):
         if result.done:
             break
 
-        # Build prompt from current observation
-        user_prompt = format_observation(observation)
+        # Build prompt with full history so agent has context
+        history_text = format_history(conversation_history)
+        obs_text = format_observation(observation)
+
+        if history_text:
+            user_prompt = f"{history_text}\n\n---\n\nCURRENT OBSERVATION:\n{obs_text}"
+        else:
+            user_prompt = obs_text
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        prompt_text = tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            tokenize=False,
-            enable_thinking=False,
-        )
+        prompt_text = apply_chat_template(tokenizer, messages)
 
         # Generate with vLLM via TRL
         rollout_outputs = generate_rollout_completions(trainer, [prompt_text])[0]
@@ -189,6 +239,12 @@ def rollout_once(
         commands = parse_commands(completion_text)
         if not commands:
             step_rewards.append(-0.5)
+            conversation_history.append({
+                "command": completion_text[:100].strip(),
+                "output": "(no valid command parsed)",
+                "reward": -0.5,
+                "feedback": "Invalid output — expected kubectl/diagnose:/fix: command.",
+            })
             continue
 
         for cmd in commands:
@@ -198,7 +254,16 @@ def rollout_once(
                 step_rewards.append(reward)
                 observation = result.observation
 
-                # Track specific reward types
+                # Record in history for next turn's context
+                cmd_output = getattr(observation, "command_output", "") or ""
+                hint = getattr(observation, "hint", "") or ""
+                conversation_history.append({
+                    "command": cmd,
+                    "output": cmd_output[:500],
+                    "reward": reward,
+                    "feedback": hint,
+                })
+
                 if cmd.startswith("diagnose:"):
                     diagnosis_rewards.append(reward)
                 elif cmd.startswith("fix:"):
@@ -209,6 +274,12 @@ def rollout_once(
             except Exception as e:
                 logger.warning(f"Step error: {e}")
                 step_rewards.append(-0.1)
+                conversation_history.append({
+                    "command": cmd,
+                    "output": f"ERROR: {e}",
+                    "reward": -0.1,
+                    "feedback": "",
+                })
                 break
 
     # Aggregate rewards
@@ -263,7 +334,8 @@ def main() -> None:
 
     # ---- Tokenizer ----
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
-    tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     # ---- Connect to OpenEnv server ----
     env = KubeSreGymEnv(base_url=args.env_url)
