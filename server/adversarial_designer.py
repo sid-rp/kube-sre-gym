@@ -332,7 +332,7 @@ Agent skill profile: {json.dumps(skill_profile) if skill_profile else "no histor
 Weak spots to exploit: {weak_spots if weak_spots else "any — agent is new"}
 Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "none"}
 
-{"HARD MODE: Design a " + str(max_mutations) + "-fault compound incident spread across ALL 3 namespaces (payments, frontend, auth). Use DIFFERENT fault types for each (e.g., OOM in payments + bad image in frontend + scale-zero in auth). The agent must investigate every namespace to find all faults. Include a red herring where one symptom looks like it could be caused by a different fault." if difficulty > 0.7 else "Design a " + str(max_mutations) + "-fault incident across at least 2 namespaces. Use different fault types so the agent sees mixed symptoms (e.g., OOMKilled + ImagePullBackOff). Keep it solvable within the step budget." if difficulty > 0.5 else "Start with a single-fault scenario. One root cause, clear symptoms."}
+{"HARD MODE: Design a " + str(max_mutations) + "-fault compound incident spread across ALL 3 namespaces (payments, frontend, auth). Use DIFFERENT fault types for each (e.g., OOM in payments + bad image in frontend + scale-zero in auth). The agent must investigate every namespace to find all faults. Include a red herring where one symptom looks like it could be caused by a different fault." if difficulty > 0.7 else "Design a " + str(max_mutations) + "-fault incident across at least 2 namespaces. Use different fault types so the agent sees mixed symptoms (e.g., OOMKilled + ImagePullBackOff). Keep it solvable within the step budget."}
 
 {"Focus on these weak areas: " + ", ".join(weak_spots) if weak_spots else ""}"""
 

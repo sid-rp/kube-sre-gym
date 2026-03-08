@@ -179,7 +179,7 @@ class KubeSreGymEnvironment(Environment):
 
         # resource_quota doesn't crash existing pods, just blocks new ones
         # scale_zero removes all pods — check for 0 pods instead of unhealthy
-        if fault_type in ("resource_quota", "scale_zero"):
+        if fault_type in ("resource_quota", "scale_zero", "adversarial"):
             time.sleep(3)
             return
 
