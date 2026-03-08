@@ -258,7 +258,7 @@ class KubeSreGymEnvironment(Environment):
         elif is_fix and not exec_cmd.startswith("kubectl"):
             output = f"Fix submitted but no kubectl command found. Use: fix: kubectl <command>"
         else:
-            output = self.backend.execute(exec_cmd)
+            output = "error: only kubectl commands, 'diagnose: <text>', and 'fix: kubectl <cmd>' are supported."
 
         # Penalize repeated commands (same command run before)
         repeat_count = sum(1 for h in self.history if h["command"] == action.command)
@@ -272,13 +272,6 @@ class KubeSreGymEnvironment(Environment):
             penalty = min(0.5, repeat_count * 0.15)
             reward -= penalty
             feedback += f" Repeated command ({repeat_count + 1}x)."
-
-        # Override judge leniency: commands that fail should not get positive rewards.
-        # The judge often gives +0.4 for "good syntax" even when output is "Error: Not Found".
-        _ERROR_PATTERNS = ("Error: Not Found", "Error from server", "error:", "No resources found")
-        if any(p in output for p in _ERROR_PATTERNS) and reward > 0:
-            reward = min(reward, -0.2)
-            feedback += " Command failed."
 
         # Log AFTER all reward adjustments so the displayed reward matches reality
         logger.info(f"    -> reward={reward:.2f} | {feedback[:80]}")
@@ -426,6 +419,9 @@ class KubeSreGymEnvironment(Environment):
                         f"tier={self.curriculum.get_tier_name()} | "
                         f"difficulty={self.curriculum.get_difficulty():.2f} ===")
 
+            # Save step count before zeroing (for transcript)
+            episode_steps = self._step_count
+
             # Mark episode as complete so _do_reset() doesn't double-log as ABANDONED
             self._step_count = 0
 
@@ -435,7 +431,7 @@ class KubeSreGymEnvironment(Environment):
                     "episode": self.curriculum.episode_count,
                     "fault_type": track_type,
                     "resolved": resolved,
-                    "steps": self._step_count,
+                    "steps": episode_steps,
                     "total_reward": total_reward,
                     "difficulty": self.curriculum.get_difficulty(),
                     "tier": self.curriculum.get_tier_name(),
