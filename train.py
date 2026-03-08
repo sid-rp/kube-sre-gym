@@ -9,18 +9,17 @@ Everything runs on the H100:
 
 Setup (3 terminals on H100):
 
+  # Install
+  pip install -e ".[train]"
+
   # Terminal 1: Judge model
   trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001
 
-  # Terminal 2: OpenEnv server (env + k8s backend + judge client)
-  LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 \
-    python -m server.app --port 8000
+  # Terminal 2: OpenEnv server
+  LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 uv run server
 
   # Terminal 3: GRPO training
   python train.py --vllm-mode colocate
-
-Dependencies:
-  pip install -e ".[train]"
 """
 
 from __future__ import annotations

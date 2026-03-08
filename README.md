@@ -15,10 +15,34 @@ tags:
 
 A Kubernetes SRE training environment where an RL agent diagnoses and fixes real GKE cluster incidents. Features curriculum-driven difficulty, LLM-based judging, and dynamic scenario generation.
 
-## Setup (H100)
+## Quick Start
+
+Install the environment client:
 
 ```bash
-# 1. Clone and install
+pip install git+https://huggingface.co/spaces/openenv-community/kube-sre-gym
+```
+
+Use the environment:
+
+```python
+from kube_sre_gym import KubeSreGymAction, KubeSreGymEnv
+
+with KubeSreGymEnv(base_url="http://localhost:8000").sync() as client:
+    result = client.reset()
+    print(result.observation.command_output)
+
+    result = client.step(KubeSreGymAction(command="kubectl get pods -A"))
+    print(result.observation.cluster_status_summary)
+
+    result = client.step(KubeSreGymAction(command="diagnose: OOMKill due to low memory limits"))
+    result = client.step(KubeSreGymAction(command="fix: kubectl set resources deployment/payment-api --limits=memory=256Mi -n payments"))
+```
+
+## Training (H100)
+
+```bash
+# 1. Clone and install with training deps
 git clone https://huggingface.co/spaces/openenv-community/kube-sre-gym
 cd kube-sre-gym
 pip install -e ".[train]"
@@ -32,28 +56,23 @@ export HF_TOKEN=<hf-token>
 # 3. Start judge model (Terminal 1)
 trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001
 
-# 4. Start OpenEnv server (Terminal 2)
+# 4. Start environment server (Terminal 2)
 LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 \
-  python -m kube_sre_gym.server.app --port 8000
+  uv run server
 
 # 5. Run GRPO training (Terminal 3)
 python train.py --vllm-mode colocate
 ```
 
-## Client Usage
+## Development
 
-```python
-from kube_sre_gym import KubeSreGymAction, KubeSreGymEnv
+```bash
+# Install in editable mode
+cd kube-sre-gym
+pip install -e .
 
-with KubeSreGymEnv(base_url="http://localhost:8000") as client:
-    result = client.reset()
-    print(result.observation.command_output)
-
-    result = client.step(KubeSreGymAction(command="kubectl get pods -A"))
-    print(result.observation.cluster_status_summary)
-
-    result = client.step(KubeSreGymAction(command="diagnose: OOMKill due to low memory limits"))
-    result = client.step(KubeSreGymAction(command="fix: kubectl set resources deployment/payment-api --limits=memory=256Mi -n payments"))
+# Run server locally
+uv run server
 ```
 
 ## Architecture

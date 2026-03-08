@@ -39,7 +39,7 @@ trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001
 
 # Terminal 2: OpenEnv server (environment + k8s backend + judge client)
 LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 \
-  python -m server.app --port 8000
+  uv run server
 
 # Terminal 3: GRPO training (agent model with TRL's built-in vLLM)
 python train.py --vllm-mode colocate
