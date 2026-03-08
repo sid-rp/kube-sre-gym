@@ -145,6 +145,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--num-epochs", type=int, default=1)
+    parser.add_argument("--max-steps", type=int, default=-1, help="Max GRPO training steps (-1 = auto)")
     parser.add_argument("--save-steps", type=int, default=10)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--push-to-hub", action="store_true", help="Push model to HF Hub after training")
@@ -516,6 +517,7 @@ def main() -> None:
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
         output_dir=str(output_dir),
+        max_steps=args.max_steps,
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         lr_scheduler_type="constant_with_warmup",  # cosine/linear hurts GRPO
