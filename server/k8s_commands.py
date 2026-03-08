@@ -79,20 +79,26 @@ class CommandHandler:
         if not pods.items:
             return "No resources found."
 
+        show_ns = (ns == "__all__" or not ns)
         rows = []
         for p in pods.items:
             total = len(p.spec.containers)
             ready_count = sum(1 for cs in (p.status.container_statuses or []) if cs.ready)
             status = _pod_status(p)
             restarts = sum(cs.restart_count for cs in (p.status.container_statuses or []))
-            rows.append([
+            row = []
+            if show_ns:
+                row.append(p.metadata.namespace or "")
+            row.extend([
                 p.metadata.name,
                 f"{ready_count}/{total}",
                 status,
                 str(restarts),
                 _format_age(p.metadata.creation_timestamp),
             ])
-        return tabulate(rows, headers=["NAME", "READY", "STATUS", "RESTARTS", "AGE"], tablefmt="plain")
+            rows.append(row)
+        headers = (["NAMESPACE"] if show_ns else []) + ["NAME", "READY", "STATUS", "RESTARTS", "AGE"]
+        return tabulate(rows, headers=headers, tablefmt="plain")
 
     def _get_deployments(self, ns: str | None) -> str:
         if ns and ns != "__all__":
@@ -100,16 +106,22 @@ class CommandHandler:
         else:
             deploys = self.apps_v1.list_deployment_for_all_namespaces()
 
+        show_ns = not ns or ns == "__all__"
         rows = []
         for d in deploys.items:
-            rows.append([
+            row = []
+            if show_ns:
+                row.append(d.metadata.namespace or "")
+            row.extend([
                 d.metadata.name,
                 f"{d.status.ready_replicas or 0}/{d.spec.replicas or 0}",
                 str(d.status.updated_replicas or 0),
                 str(d.status.available_replicas or 0),
                 _format_age(d.metadata.creation_timestamp),
             ])
-        return tabulate(rows, headers=["NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"], tablefmt="plain")
+            rows.append(row)
+        headers = (["NAMESPACE"] if show_ns else []) + ["NAME", "READY", "UP-TO-DATE", "AVAILABLE", "AGE"]
+        return tabulate(rows, headers=headers, tablefmt="plain")
 
     def _get_events(self, ns: str | None) -> str:
         if ns and ns != "__all__":

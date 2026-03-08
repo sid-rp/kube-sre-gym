@@ -63,7 +63,7 @@ AGENT'S ACTIONS:
 {history_summary}
 
 CURRENT CLUSTER STATE (kubectl get pods -A):
-{cluster_snapshot[:2000]}
+{cluster_snapshot[:4000]}
 
 QUESTION: Did the agent actually fix ALL the issues described above?
 Look for:
