@@ -412,12 +412,18 @@ class CommandHandler:
         if not parts:
             return "error: subcommand required (restart, status)"
         sub = parts[0]
-        if sub == "restart" and len(parts) > 1:
-            deploy_name = parts[1].replace("deployment/", "")
-            return self.rollout_restart(deploy_name, ns or DEFAULT_NAMESPACE)
-        elif sub == "status" and len(parts) > 1:
-            deploy_name = parts[1].replace("deployment/", "")
-            return self._rollout_status(deploy_name, ns or DEFAULT_NAMESPACE)
+        # Support both "rollout restart deployment/name" and "rollout restart deployment name"
+        if sub in ("restart", "status") and len(parts) > 1:
+            if "/" in parts[1]:
+                deploy_name = parts[1].split("/")[-1]
+            elif parts[1] in ("deployment", "deploy", "deployments") and len(parts) > 2:
+                deploy_name = parts[2]
+            else:
+                deploy_name = parts[1]
+            if sub == "restart":
+                return self.rollout_restart(deploy_name, ns or DEFAULT_NAMESPACE)
+            else:
+                return self._rollout_status(deploy_name, ns or DEFAULT_NAMESPACE)
         return "error: unsupported rollout command"
 
     def _rollout_status(self, deploy_name: str, ns: str) -> str:
@@ -444,6 +450,8 @@ class CommandHandler:
         for i, p in enumerate(parts):
             if "/" in p and not p.startswith("-"):
                 deploy_name = p.split("/")[-1]
+            elif p in ("deployment", "deploy", "deployments") and i + 1 < len(parts) and not parts[i + 1].startswith("-"):
+                deploy_name = parts[i + 1]
             if p == "-c" and i + 1 < len(parts):
                 container_name = parts[i + 1]
             if p.startswith("--limits="):
@@ -474,10 +482,12 @@ class CommandHandler:
         """Set container image on a deployment."""
         deploy_name = None
         container_image = {}
-        for p in parts:
+        for i, p in enumerate(parts):
             if "/" in p and "=" not in p:
                 deploy_name = p.split("/")[-1]
-            elif "=" in p:
+            elif p in ("deployment", "deploy", "deployments") and i + 1 < len(parts) and "=" not in parts[i + 1] and not parts[i + 1].startswith("-"):
+                deploy_name = parts[i + 1]
+            elif "=" in p and not p.startswith("-"):
                 cname, img = p.split("=", 1)
                 container_image[cname] = img
         if not deploy_name:
@@ -503,9 +513,11 @@ class CommandHandler:
         """Set environment variables on a deployment."""
         deploy_name = None
         env_vars = {}
-        for p in parts:
+        for i, p in enumerate(parts):
             if "/" in p and "=" not in p:
                 deploy_name = p.split("/")[-1]
+            elif p in ("deployment", "deploy", "deployments") and i + 1 < len(parts) and "=" not in parts[i + 1] and not parts[i + 1].startswith("-"):
+                deploy_name = parts[i + 1]
             elif "=" in p and not p.startswith("-"):
                 k, v = p.split("=", 1)
                 env_vars[k] = v
@@ -564,9 +576,12 @@ class CommandHandler:
         namespace = ns or DEFAULT_NAMESPACE
         deploy_name = None
         replicas = None
-        for p in parts:
+        for i, p in enumerate(parts):
             if "/" in p:
                 deploy_name = p.split("/")[-1]
+            elif p in ("deployment", "deploy", "deployments") and i + 1 < len(parts):
+                # "scale deployment frontend-cache" — next part is the name
+                deploy_name = parts[i + 1]
             if p.startswith("--replicas="):
                 try:
                     replicas = int(p.split("=")[1])
