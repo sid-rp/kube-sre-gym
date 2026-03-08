@@ -62,7 +62,8 @@ class KubeSreGymEnvironment(Environment):
 
             self.scenario = None
             self._step_count = 0
-            self.max_steps = int(os.environ.get("MAX_STEPS", str(MAX_STEPS)))
+            self._base_max_steps = int(os.environ.get("MAX_STEPS", str(MAX_STEPS)))
+            self.max_steps = self._base_max_steps
             self.history = []
             self._state = KubeSreGymState(episode_id=str(uuid4()), step_count=0)
 
@@ -129,6 +130,10 @@ class KubeSreGymEnvironment(Environment):
 
         # Step 3: Wait for fault to actually manifest before snapshotting
         self._wait_for_fault_visible()
+
+        # Scale max steps with difficulty — harder scenarios need more investigation
+        # Easy (0.15): 15 steps, Hard (0.80): 20 steps, Expert (0.95): 25 steps
+        self.max_steps = int(self._base_max_steps + 10 * difficulty)
 
         self._step_count = 0
         self.history = []
@@ -282,11 +287,14 @@ class KubeSreGymEnvironment(Environment):
 
             if all_healthy:
                 done = True
-                # Efficiency bonus: solving in fewer steps is better
-                # Max bonus at step 1 (3.0), min bonus at max_steps (1.0)
-                efficiency = 1.0 + 2.0 * (1.0 - self._step_count / self.max_steps)
+                # Efficiency bonus scaled by difficulty:
+                # - Easy (0.15): max 3.0, rewards fast solves
+                # - Hard (0.80): max 5.0, rewards solving at all
+                difficulty = self.curriculum.get_difficulty()
+                base_bonus = 1.0 + difficulty * 2.0  # 1.0 at easy, 3.0 at hard
+                efficiency = base_bonus + 2.0 * (1.0 - self._step_count / self.max_steps)
                 reward += efficiency
-                feedback = f"Incident resolved! All pods healthy. (efficiency bonus: +{efficiency:.1f})"
+                feedback = f"Incident resolved! All pods healthy. (bonus: +{efficiency:.1f})"
             else:
                 # Partial progress feedback — tell agent how many pods are healthy
                 feedback += f" Fix applied. {healthy_count}/{total_count} pods healthy."
