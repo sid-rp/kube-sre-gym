@@ -2,6 +2,7 @@ import json
 import logging
 import random
 from .llm_client import LLMClient
+from .constants import INJECTABLE_FAILURES, TOPOLOGY
 
 try:
     from ..models import ScenarioSpec
@@ -9,22 +10,6 @@ except ImportError:
     from models import ScenarioSpec
 
 logger = logging.getLogger(__name__)
-
-INJECTABLE_FAILURES = {
-    "oom_kill": "Sets memory limit to 4Mi — pod OOMKills (exit code 137)",
-    "crashloop": "Changes container command to 'exit 1' — CrashLoopBackOff",
-    "image_pull": "Sets image to nonexistent tag — ImagePullBackOff/ErrImagePull",
-    "bad_config": "Sets DB_HOST env var to invalid host — app connection errors",
-    "liveness_probe": "Sets liveness probe to wrong path — pod restart loop",
-    "resource_quota": "Applies tight ResourceQuota — new pods blocked from scheduling",
-    "cascading_db": "OOMs redis — payment-api loses backend — frontend 502s",
-}
-
-TOPOLOGY = {
-    "payments": ["payment-api", "redis", "postgres"],
-    "frontend": ["web-frontend", "nginx-proxy"],
-    "auth": ["auth-service", "token-store"],
-}
 
 SCENARIO_POOL = [
     ScenarioSpec(
@@ -44,12 +29,12 @@ SCENARIO_POOL = [
         expected_diagnostic_path=["kubectl get pods -n payments", "kubectl logs payment-api -n payments"],
     ),
     ScenarioSpec(
-        failure_type="image_pull", namespace="frontend", deployment="web-frontend",
-        params={"namespace": "frontend", "deployment": "web-frontend"},
+        failure_type="image_pull", namespace="frontend", deployment="web-app",
+        params={"namespace": "frontend", "deployment": "web-app"},
         root_cause="Deployment references non-existent image tag",
-        difficulty=0.2, alert_message="WARNING: web-frontend ImagePullBackOff",
+        difficulty=0.2, alert_message="WARNING: web-app ImagePullBackOff",
         correct_fix_description="Set image to valid tag",
-        expected_diagnostic_path=["kubectl get pods -n frontend", "kubectl describe pod web-frontend -n frontend"],
+        expected_diagnostic_path=["kubectl get pods -n frontend", "kubectl describe pod web-app -n frontend"],
     ),
     ScenarioSpec(
         failure_type="bad_config", namespace="payments", deployment="payment-api",
@@ -60,12 +45,12 @@ SCENARIO_POOL = [
         expected_diagnostic_path=["kubectl get pods -n payments", "kubectl logs payment-api -n payments"],
     ),
     ScenarioSpec(
-        failure_type="liveness_probe", namespace="frontend", deployment="web-frontend",
-        params={"namespace": "frontend", "deployment": "web-frontend"},
+        failure_type="liveness_probe", namespace="frontend", deployment="web-app",
+        params={"namespace": "frontend", "deployment": "web-app"},
         root_cause="Liveness probe checking wrong path, pod keeps restarting",
-        difficulty=0.5, alert_message="WARNING: web-frontend pods restarting frequently",
+        difficulty=0.5, alert_message="WARNING: web-app pods restarting frequently",
         correct_fix_description="Patch liveness probe to correct path",
-        expected_diagnostic_path=["kubectl get pods -n frontend", "kubectl describe pod web-frontend -n frontend"],
+        expected_diagnostic_path=["kubectl get pods -n frontend", "kubectl describe pod web-app -n frontend"],
     ),
     ScenarioSpec(
         failure_type="resource_quota", namespace="payments", deployment="payment-api",
@@ -76,12 +61,12 @@ SCENARIO_POOL = [
         expected_diagnostic_path=["kubectl get pods -n payments", "kubectl get events -n payments"],
     ),
     ScenarioSpec(
-        failure_type="cascading_db", namespace="payments", deployment="redis",
-        params={"namespace": "payments"},
-        root_cause="Redis OOMKilled causing cascading failures across services",
+        failure_type="cascading_db", namespace="frontend", deployment="frontend-cache",
+        params={"namespace": "frontend", "deployment": "frontend-cache"},
+        root_cause="Redis cache OOMKilled causing cascading failures across frontend services",
         difficulty=0.8, alert_message="CRITICAL: Multiple services degraded",
-        correct_fix_description="Fix redis memory limits, restart dependent services",
-        expected_diagnostic_path=["kubectl get pods -A", "kubectl describe pod redis -n payments"],
+        correct_fix_description="Fix frontend-cache memory limits, restart dependent services",
+        expected_diagnostic_path=["kubectl get pods -A", "kubectl describe pod frontend-cache -n frontend"],
     ),
 ]
 
@@ -108,16 +93,32 @@ class ScenarioGenerator:
         self.llm = llm
         self.mode = mode
 
-    def generate(self, skill_profile: dict, difficulty: float) -> ScenarioSpec:
+    def generate(self, skill_profile: dict, difficulty: float,
+                 fault_type_hint: str = None) -> ScenarioSpec:
+        """Generate a scenario, optionally targeting a specific fault type.
+
+        Args:
+            skill_profile: {fault_type: success_rate} from curriculum
+            difficulty: 0.0-1.0 from curriculum
+            fault_type_hint: if set, prefer this fault type (from curriculum.pick_fault_type())
+        """
         if self.mode == "llm" and self.llm:
             return self._generate_llm(skill_profile, difficulty)
-        return self._generate_simple(skill_profile, difficulty)
+        return self._generate_simple(skill_profile, difficulty, fault_type_hint)
 
-    def _generate_simple(self, skill_profile: dict, difficulty: float) -> ScenarioSpec:
+    def _generate_simple(self, skill_profile: dict, difficulty: float,
+                         fault_type_hint: str = None) -> ScenarioSpec:
         candidates = [s for s in SCENARIO_POOL if s.difficulty <= difficulty + 0.2]
         if not candidates:
             candidates = SCENARIO_POOL[:3]
 
+        # If curriculum gave us a specific fault type, prefer it
+        if fault_type_hint:
+            hint_candidates = [s for s in candidates if s.failure_type == fault_type_hint]
+            if hint_candidates:
+                return random.choice(hint_candidates)
+
+        # Otherwise fall back to weak-spot targeting
         if skill_profile:
             weak_types = {ft for ft, rate in skill_profile.items() if rate < 0.5}
             weak_candidates = [s for s in candidates if s.failure_type in weak_types]

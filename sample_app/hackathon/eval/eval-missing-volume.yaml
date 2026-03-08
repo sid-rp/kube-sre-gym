@@ -1,0 +1,31 @@
+# eval-missing-volume: Pod tries to mount nonexistent ConfigMap
+apiVersion: v1
+kind: Pod
+metadata:
+  name: eval-missing-volume
+  namespace: hackathon
+  labels:
+    app: eval-missing-volume
+    tier: eval
+    scenario: eval
+spec:
+  containers:
+    - name: app
+      image: busybox:1.36
+      command: ["/bin/sh", "-c", "cat /config/settings.yaml && sleep 3600"]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 32Mi
+        limits:
+          cpu: 100m
+          memory: 64Mi
+      volumeMounts:
+        - name: config-vol
+          mountPath: /config
+  volumes:
+    - name: config-vol
+      configMap:
+        # This ConfigMap does NOT exist → Pod stuck in Pending/CreateContainerConfigError
+        name: nonexistent-config-eval
+  restartPolicy: Never

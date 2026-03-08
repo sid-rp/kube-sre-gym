@@ -41,55 +41,50 @@ with KubeSreGymEnv(base_url="http://localhost:8000") as client:
 
 ## Training (H100)
 
+You need 3 terminals. The env server talks to your GKE cluster, the judge model scores agent actions, and train.py runs GRPO.
+
+**Step 1 — Install**
 ```bash
-# 1. Clone and install with training deps
-git clone https://huggingface.co/spaces/openenv-community/kube-sre-gym
-cd kube-sre-gym
+git clone https://huggingface.co/spaces/openenv-community/kube-sre-gym && cd kube-sre-gym
 pip install -e ".[train]"
+```
 
-# 2. Set env vars
-export K8S_TOKEN=<gke-token>
-export K8S_ENDPOINT=<gke-api-url>
-export K8S_CA_CERT=<base64-ca-cert>
-export HF_TOKEN=<hf-token>
+**Step 2 — Set credentials** (add to your `.bashrc` or export in each terminal)
+```bash
+export K8S_TOKEN=<gke-token>           # GKE service account bearer token
+export K8S_ENDPOINT=<gke-api-url>      # e.g. https://35.x.x.x
+export K8S_CA_CERT=<base64-ca-cert>    # base64-encoded cluster CA
+export HF_TOKEN=<hf-token>             # for pushing model checkpoints
+```
 
-# 3. Start judge model (Terminal 1)
-# Cap GPU memory to ~32GB so the agent training fits alongside
+**Step 3 — Launch** (3 terminals)
+```bash
+# Terminal 1: Judge model (~32GB VRAM)
 trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001 --gpu_memory_utilization 0.4
 
-# 4. Start environment server (Terminal 2)
-LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 \
-  uv run server
+# Terminal 2: Environment server
+LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 uv run server
 
-# 5. Run GRPO training (Terminal 3)
+# Terminal 3: GRPO training (~48GB VRAM)
 python train.py --vllm-mode colocate
 ```
 
-## Training with External Judge (Adversarial Mode)
+The curriculum starts with easy faults (OOM, crashloop, bad image) and automatically progresses to harder ones as the agent improves. No manual difficulty tuning needed.
 
-Use Claude (or any external LLM) as the judge — no self-hosted judge model needed.
-The LLM designs complex multi-step incidents that teach the agent real SRE workflow:
-triage, investigation, mitigation, fix, verification.
+## Adversarial Mode (External Judge)
+
+Uses Claude as judge + scenario designer instead of the self-hosted Qwen model. Frees up the full 80GB for the training agent.
 
 ```bash
-# 1. Set env vars
-export K8S_TOKEN=<gke-token>
-export K8S_ENDPOINT=<gke-api-url>
-export K8S_CA_CERT=<base64-ca-cert>
+# Terminal 1: Environment server (no vLLM judge needed)
 export ANTHROPIC_API_KEY=sk-ant-...
-
-# 2. Start environment server with adversarial mode (Terminal 1)
-# No vLLM judge needed — Claude is the judge AND scenario designer
 GYM_MODE=adversarial LLM_BACKEND=anthropic uv run server
 
-# 3. Run GRPO training (Terminal 2) — full 80GB for the agent
+# Terminal 2: GRPO training (full GPU)
 python train.py --vllm-mode colocate
 ```
 
-In adversarial mode, the external LLM:
-- **Designs** multi-step incidents (cascading failures, red herrings, compound faults)
-- **Injects** them into the real GKE cluster via kubectl mutations
-- **Judges** agent actions with phase-aware scoring (rewards correct SRE workflow order)
+In adversarial mode, Claude designs multi-step incidents with cascading failures and red herrings, injects them into the cluster, and scores agent actions using phase-aware SRE workflow evaluation.
 
 ## Development
 
@@ -108,17 +103,19 @@ Everything runs on the H100. HF Hub is just for code + model weights.
 
 ```
 H100 (all-in-one)                              GKE Cluster
-┌──────────────────────────────────┐          ┌──────────────┐
-│ OpenEnv server  :8000            │  k8s     │ hackathon ns │
-│  reset/step/state                │──client──►│ payment-api  │
-│  Judge ──► vLLM :8001            │          │ redis        │
-│                                  │          └──────────────┘
-│ vLLM :8001  Qwen3-14B (judge)    │
+┌──────────────────────────────────┐          ┌─────────────────────┐
+│ OpenEnv server  :8000            │  k8s     │ payments ns         │
+│  reset/step/state                │──client──►│ frontend ns         │
+│  Curriculum → Judge → vLLM :8001 │          │ auth ns             │
+│                                  │          │ hackathon ns        │
+│ vLLM :8001  Qwen3-14B (judge)    │          └─────────────────────┘
 │                                  │
 │ train.py  GRPO (TRL+vLLM)       │
 │  Qwen3-8B agent, BF16+LoRA, G=4 │
 └──────────────────────────────────┘
 ```
+
+Each episode: reset deploys clean healthy pods → curriculum picks one fault → injects it → agent investigates and fixes → judge scores → curriculum tracks mastery.
 
 ## Failure Types
 
@@ -150,22 +147,29 @@ H100 (all-in-one)                              GKE Cluster
 ## Project Structure
 
 ```
-kube_sre_gym/               (this repo root)
+kube-sre-gym/
 ├── __init__.py             # Module exports
 ├── models.py               # Action, Observation, State models
 ├── client.py               # KubeSreGymEnv client
-├── openenv.yaml            # OpenEnv manifest
+├── train.py                # GRPO training (TRL + vLLM, runs on H100)
 ├── pyproject.toml          # Dependencies
 ├── Dockerfile              # Container image
-├── train.py                # GRPO training (TRL + vLLM, runs on H100)
+├── sample_app/
+│   ├── namespaces.yaml     # payments, frontend, auth, hackathon
+│   ├── base/               # Healthy manifests (deployed on reset)
+│   ├── hackathon/          # Training/eval/complex broken scenarios
+│   ├── deploy_all.sh
+│   └── cleanup.sh
 └── server/
-    ├── __init__.py
     ├── kube_sre_gym_environment.py  # Core environment (reset/step)
-    ├── app.py              # FastAPI application
-    ├── k8s_backend.py      # Kubernetes API client
-    ├── llm_client.py       # HF/OpenAI/Anthropic LLM wrapper
-    ├── scenario_generator.py  # Failure scenario generation (standard mode)
-    ├── adversarial_designer.py  # LLM-designed multi-step incidents (adversarial mode)
-    ├── curriculum.py       # Difficulty & persona controller
-    └── judge.py            # LLMJudge + AdversarialJudge (phase-aware scoring)
+    ├── k8s_backend.py      # K8s auth, command dispatch, reset, health checks
+    ├── k8s_commands.py     # kubectl command handlers (get/describe/logs/set/patch)
+    ├── k8s_injectors.py    # Failure injectors (oom, crashloop, image_pull, etc.)
+    ├── constants.py        # Shared constants (topology, healthy state, timeouts)
+    ├── curriculum.py       # Progressive difficulty + mastery tracking
+    ├── scenario_generator.py  # Fault scenario pool + LLM generation
+    ├── adversarial_designer.py  # LLM-designed compound incidents
+    ├── judge.py            # LLMJudge + AdversarialJudge (phase-aware)
+    ├── llm_client.py       # OpenAI/HF/Anthropic LLM wrapper
+    └── app.py              # FastAPI application
 ```

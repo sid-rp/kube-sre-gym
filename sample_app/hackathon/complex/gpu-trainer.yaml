@@ -1,0 +1,24 @@
+# gpu-trainer: Stuck in Pending — requests impossible resources (999Gi memory, 500 CPU)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-trainer
+  namespace: hackathon
+  labels:
+    app: gpu-trainer
+    tier: compute
+    scenario: complex
+spec:
+  containers:
+    - name: trainer
+      image: python:3.11-slim
+      command: ["python", "-c", "print('Training started'); import time; time.sleep(3600)"]
+      resources:
+        requests:
+          # Impossible resource request → Pod stuck in Pending
+          cpu: "500"
+          memory: 999Gi
+        limits:
+          cpu: "500"
+          memory: 999Gi
+  restartPolicy: Never

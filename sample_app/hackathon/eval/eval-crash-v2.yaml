@@ -1,0 +1,41 @@
+# eval-crash-v2: CrashLoopBackOff with segfault error (different from training crash)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eval-crash-v2
+  namespace: hackathon
+  labels:
+    app: eval-crash-v2
+    tier: eval
+    scenario: eval
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eval-crash-v2
+  template:
+    metadata:
+      labels:
+        app: eval-crash-v2
+        tier: eval
+        scenario: eval
+    spec:
+      containers:
+        - name: worker
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "eval-crash-v2: Initializing worker thread pool..."
+              sleep 1
+              echo "eval-crash-v2: Processing batch 1/100..."
+              sleep 1
+              echo "SegmentationFault in worker thread — invalid memory access at 0x7f3a2b000000"
+              exit 139
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

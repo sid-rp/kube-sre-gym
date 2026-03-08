@@ -1,0 +1,39 @@
+# payment-api: OOMKilled — python tries to allocate 512MB but limit is 64Mi
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-api
+  namespace: payments
+  labels:
+    app: payment-api
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-api
+  template:
+    metadata:
+      labels:
+        app: payment-api
+        tier: api
+    spec:
+      containers:
+        - name: payment-api
+          image: python:3.11-slim
+          command: ["python", "-c"]
+          args:
+            - |
+              import time
+              print("payment-api: Loading transaction cache into memory...")
+              # Allocate ~512MB which exceeds the 64Mi limit → OOMKilled
+              data = bytearray(512 * 1024 * 1024)
+              print("Cache loaded, serving requests...")
+              time.sleep(3600)
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

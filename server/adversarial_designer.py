@@ -19,7 +19,7 @@ import time
 
 from .llm_client import LLMClient
 from .k8s_backend import K8sBackend
-from .scenario_generator import TOPOLOGY
+from .constants import TOPOLOGY, HEALTHY_STATE
 
 try:
     from ..models import AdversarialScenarioSpec, IncidentStep
@@ -29,26 +29,9 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-# ---- Steady-state: what "healthy" looks like ----
-HEALTHY_STATE = {
-    "payments": {
-        "payment-api": {"container_name": "payment-api", "image": "nginx:latest", "env": {"DB_HOST": "postgres.payments.svc.cluster.local", "REDIS_URL": "redis://redis.payments.svc.cluster.local:6379", "PORT": "8080"}, "memory_limit": "256Mi", "replicas": 2, "liveness_probe": {"path": "/health", "port": 8080}},
-        "redis": {"container_name": "redis", "image": "redis:7-alpine", "env": {}, "memory_limit": "128Mi", "replicas": 1, "liveness_probe": None},
-        "postgres": {"container_name": "postgres", "image": "postgres:15-alpine", "env": {"POSTGRES_DB": "payments", "PGPORT": "5432"}, "memory_limit": "256Mi", "replicas": 1, "liveness_probe": None},
-    },
-    "frontend": {
-        "web-frontend": {"container_name": "web-frontend", "image": "nginx:latest", "env": {"API_URL": "http://payment-api.payments.svc.cluster.local:8080", "PORT": "3000"}, "memory_limit": "128Mi", "replicas": 2, "liveness_probe": {"path": "/health", "port": 3000}},
-        "nginx-proxy": {"container_name": "nginx-proxy", "image": "nginx:latest", "env": {"UPSTREAM_PORT": "3000"}, "memory_limit": "64Mi", "replicas": 1, "liveness_probe": None},
-    },
-    "auth": {
-        "auth-service": {"container_name": "auth-service", "image": "nginx:latest", "env": {"DB_HOST": "token-store.auth.svc.cluster.local", "TOKEN_SECRET": "supersecret", "PORT": "8081"}, "memory_limit": "128Mi", "replicas": 2, "liveness_probe": {"path": "/health", "port": 8081}},
-        "token-store": {"container_name": "token-store", "image": "redis:7-alpine", "env": {}, "memory_limit": "64Mi", "replicas": 1, "liveness_probe": None},
-    },
-}
-
-
 # ---- Simple single-fault scenarios for warmup / beginner tiers ----
 # These don't need the LLM — they're predictable and easy to diagnose.
+# Deployment names must match sample_app manifests and HEALTHY_STATE in constants.py.
 WARMUP_SCENARIOS = [
     {
         "name": "wrong-db-host-payments",
@@ -56,41 +39,41 @@ WARMUP_SCENARIOS = [
         "deployment": "payment-api",
         "root_cause": "payment-api DB_HOST env var points to non-existent host",
         "alert_message": "CRITICAL: payment-api returning 500 errors on all requests",
-        "correct_fix_description": "Set DB_HOST back to postgres.payments.svc.cluster.local",
+        "correct_fix_description": "Set DB_HOST back to payment-db.payments.svc.cluster.local",
         "steps": [{"action": "kubectl set env deployment/payment-api -n payments DB_HOST=wrong-host.invalid",
                     "effect": "payment-api cannot connect to database"}],
         "diagnosis_steps": ["kubectl get pods -n payments", "kubectl logs payment-api -n payments --tail=50"],
-        "fix_steps": ["kubectl set env deployment/payment-api -n payments DB_HOST=postgres.payments.svc.cluster.local"],
+        "fix_steps": ["kubectl set env deployment/payment-api -n payments DB_HOST=payment-db.payments.svc.cluster.local"],
         "verify_steps": ["kubectl get pods -n payments"],
         "red_herrings": [],
         "expected_observation_hints": ["connection refused", "host not found"],
     },
     {
-        "name": "oom-kill-payment-api",
+        "name": "oom-kill-payment-gateway",
         "namespace": "payments",
-        "deployment": "payment-api",
-        "root_cause": "payment-api memory limit set too low, causing OOMKill",
-        "alert_message": "CRITICAL: payment-api pods OOMKilled, service unavailable",
-        "correct_fix_description": "Increase memory limits on payment-api back to 256Mi",
-        "steps": [{"action": "kubectl set resources deployment/payment-api -n payments --limits=memory=4Mi",
-                    "effect": "payment-api OOMKilled (exit code 137)"}],
-        "diagnosis_steps": ["kubectl get pods -n payments", "kubectl describe pod payment-api -n payments"],
-        "fix_steps": ["kubectl set resources deployment/payment-api -n payments --limits=memory=256Mi"],
+        "deployment": "payment-gateway",
+        "root_cause": "payment-gateway memory limit set too low, causing OOMKill",
+        "alert_message": "CRITICAL: payment-gateway pods OOMKilled, service unavailable",
+        "correct_fix_description": "Increase memory limits on payment-gateway back to 128Mi",
+        "steps": [{"action": "kubectl set resources deployment/payment-gateway -n payments --limits=memory=4Mi",
+                    "effect": "payment-gateway OOMKilled (exit code 137)"}],
+        "diagnosis_steps": ["kubectl get pods -n payments", "kubectl describe pod payment-gateway -n payments"],
+        "fix_steps": ["kubectl set resources deployment/payment-gateway -n payments --limits=memory=128Mi"],
         "verify_steps": ["kubectl get pods -n payments"],
         "red_herrings": [],
         "expected_observation_hints": ["OOMKilled", "exit code 137"],
     },
     {
-        "name": "bad-image-web-frontend",
+        "name": "bad-image-web-app",
         "namespace": "frontend",
-        "deployment": "web-frontend",
-        "root_cause": "web-frontend image tag changed to nonexistent version",
-        "alert_message": "WARNING: web-frontend pods stuck in ImagePullBackOff",
-        "correct_fix_description": "Set image back to nginx:latest",
-        "steps": [{"action": "kubectl set image deployment/web-frontend -n frontend web-frontend=nginx:nonexistent-tag-99999",
-                    "effect": "web-frontend ImagePullBackOff"}],
-        "diagnosis_steps": ["kubectl get pods -n frontend", "kubectl describe pod web-frontend -n frontend"],
-        "fix_steps": ["kubectl set image deployment/web-frontend -n frontend web-frontend=nginx:latest"],
+        "deployment": "web-app",
+        "root_cause": "web-app image tag changed to nonexistent version",
+        "alert_message": "WARNING: web-app pods stuck in ImagePullBackOff",
+        "correct_fix_description": "Set image back to nginx:1.25",
+        "steps": [{"action": "kubectl set image deployment/web-app -n frontend web-app=nginx:nonexistent-tag-99999",
+                    "effect": "web-app ImagePullBackOff"}],
+        "diagnosis_steps": ["kubectl get pods -n frontend", "kubectl describe pod web-app -n frontend"],
+        "fix_steps": ["kubectl set image deployment/web-app -n frontend web-app=nginx:1.25"],
         "verify_steps": ["kubectl get pods -n frontend"],
         "red_herrings": [],
         "expected_observation_hints": ["ImagePullBackOff", "ErrImagePull"],
@@ -101,41 +84,41 @@ WARMUP_SCENARIOS = [
         "deployment": "auth-service",
         "root_cause": "auth-service DB_HOST env var points to wrong host",
         "alert_message": "CRITICAL: auth-service returning 500 errors, login failures",
-        "correct_fix_description": "Set DB_HOST back to token-store.auth.svc.cluster.local",
+        "correct_fix_description": "Set DB_HOST back to auth-db.auth.svc.cluster.local",
         "steps": [{"action": "kubectl set env deployment/auth-service -n auth DB_HOST=wrong-host.invalid",
                     "effect": "auth-service cannot connect to token store"}],
         "diagnosis_steps": ["kubectl get pods -n auth", "kubectl logs auth-service -n auth --tail=50"],
-        "fix_steps": ["kubectl set env deployment/auth-service -n auth DB_HOST=token-store.auth.svc.cluster.local"],
+        "fix_steps": ["kubectl set env deployment/auth-service -n auth DB_HOST=auth-db.auth.svc.cluster.local"],
         "verify_steps": ["kubectl get pods -n auth"],
         "red_herrings": [],
         "expected_observation_hints": ["connection refused", "host not found"],
     },
     {
-        "name": "scaled-to-zero-redis",
-        "namespace": "payments",
-        "deployment": "redis",
-        "root_cause": "redis scaled to zero replicas, payment-api has no cache backend",
-        "alert_message": "WARNING: redis has 0 pods, payment-api reporting connection errors",
-        "correct_fix_description": "Scale redis back to 1 replica",
-        "steps": [{"action": "kubectl scale deployment/redis -n payments --replicas=0",
-                    "effect": "redis has no running pods"}],
-        "diagnosis_steps": ["kubectl get pods -n payments", "kubectl get deploy -n payments"],
-        "fix_steps": ["kubectl scale deployment/redis -n payments --replicas=1"],
-        "verify_steps": ["kubectl get pods -n payments"],
+        "name": "scaled-to-zero-frontend-cache",
+        "namespace": "frontend",
+        "deployment": "frontend-cache",
+        "root_cause": "frontend-cache scaled to zero replicas, web-app has no cache backend",
+        "alert_message": "WARNING: frontend-cache has 0 pods, web-app reporting connection errors",
+        "correct_fix_description": "Scale frontend-cache back to 1 replica",
+        "steps": [{"action": "kubectl scale deployment/frontend-cache -n frontend --replicas=0",
+                    "effect": "frontend-cache has no running pods"}],
+        "diagnosis_steps": ["kubectl get pods -n frontend", "kubectl get deploy -n frontend"],
+        "fix_steps": ["kubectl scale deployment/frontend-cache -n frontend --replicas=1"],
+        "verify_steps": ["kubectl get pods -n frontend"],
         "red_herrings": [],
         "expected_observation_hints": ["0/0", "connection refused"],
     },
     {
-        "name": "wrong-port-web-frontend",
+        "name": "wrong-port-web-app",
         "namespace": "frontend",
-        "deployment": "web-frontend",
-        "root_cause": "web-frontend PORT env var changed, readiness probe fails on wrong port",
-        "alert_message": "WARNING: web-frontend pods not ready, 502 errors from nginx-proxy",
+        "deployment": "web-app",
+        "root_cause": "web-app PORT env var changed, readiness probe fails on wrong port",
+        "alert_message": "WARNING: web-app pods not ready, 502 errors reported",
         "correct_fix_description": "Set PORT back to 3000",
-        "steps": [{"action": "kubectl set env deployment/web-frontend -n frontend PORT=9999",
-                    "effect": "web-frontend readiness probe fails, service returns 502"}],
-        "diagnosis_steps": ["kubectl get pods -n frontend", "kubectl describe pod web-frontend -n frontend"],
-        "fix_steps": ["kubectl set env deployment/web-frontend -n frontend PORT=3000"],
+        "steps": [{"action": "kubectl set env deployment/web-app -n frontend PORT=9999",
+                    "effect": "web-app readiness probe fails, service returns 502"}],
+        "diagnosis_steps": ["kubectl get pods -n frontend", "kubectl describe pod web-app -n frontend"],
+        "fix_steps": ["kubectl set env deployment/web-app -n frontend PORT=3000"],
         "verify_steps": ["kubectl get pods -n frontend"],
         "red_herrings": [],
         "expected_observation_hints": ["not ready", "502"],
@@ -180,37 +163,30 @@ Use ONLY these inject/fix pairs. Each shows the exact kubectl syntax.
    Inject: kubectl set env deployment/<deploy> -n <ns> PORT=9999
    Fix:    kubectl set env deployment/<deploy> -n <ns> PORT=<correct from healthy baseline>
    Symptoms: readiness probe fails (port mismatch), service returns connection refused
-   Cascading: upstream services (nginx-proxy, web-frontend) get 502 errors
    Red herring: looks like a network issue but it's a config issue
 
-3. PORT CONFLICT (two services on same port)
-   Inject: kubectl set env deployment/<deploy_A> -n <ns> PORT=8080
-          (when another service already listens on 8080)
-   Fix:    kubectl set env deployment/<deploy_A> -n <ns> PORT=<original_port>
-   Symptoms: one service crashes, the other works fine. Confusing partial outage.
-
-4. LOW MEMORY LIMIT (OOMKill)
+3. LOW MEMORY LIMIT (OOMKill)
    Inject: kubectl set resources deployment/<deploy> -n <ns> --limits=memory=4Mi
    Fix:    kubectl set resources deployment/<deploy> -n <ns> --limits=memory=<correct from healthy baseline>
    Symptoms: OOMKilled status, exit code 137, pod restarts
    Red herring: looks like a memory leak but it's just a low limit
 
-5. BAD IMAGE TAG
+4. BAD IMAGE TAG
    Inject: kubectl set image deployment/<deploy> -n <ns> <container>=nginx:nonexistent-tag-99999
    Fix:    kubectl set image deployment/<deploy> -n <ns> <container>=<correct from healthy baseline>
    Symptoms: ImagePullBackOff, ErrImagePull
 
-6. SCALE TO ZERO
+5. SCALE TO ZERO
    Inject: kubectl scale deployment/<deploy> -n <ns> --replicas=0
    Fix:    kubectl scale deployment/<deploy> -n <ns> --replicas=<correct from healthy baseline>
    Symptoms: no pods, dependent services fail with connection refused
 
-7. BAD LIVENESS PROBE
+6. BAD LIVENESS PROBE
    Inject: kubectl patch deployment/<deploy> -n <ns> -p '{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"<container>","livenessProbe":{{"httpGet":{{"path":"/nonexistent-health-check"}}}}}}]}}}}}}}}'
    Fix:    kubectl patch deployment/<deploy> -n <ns> -p '{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"<container>","livenessProbe":{{"httpGet":{{"path":"/health"}}}}}}]}}}}}}}}'
    Symptoms: pod restarting every 30s, CrashLoopBackOff
 
-8. WRONG DATABASE CREDENTIALS / CONFIG
+7. WRONG DATABASE CREDENTIALS / CONFIG
    Inject: kubectl set env deployment/<deploy> -n <ns> POSTGRES_DB=wrong_db_name
    Fix:    kubectl set env deployment/<deploy> -n <ns> POSTGRES_DB=<correct from healthy baseline>
    Symptoms: app logs show "database not found" or authentication errors
@@ -497,17 +473,17 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
     def _fallback_scenario(self, difficulty: float) -> AdversarialScenarioSpec:
         """Hardcoded fallback if LLM fails to design a scenario."""
         if difficulty > 0.5:
-            # Hard: cascading auth + port conflict
+            # Hard: cascading auth + OOM
             return AdversarialScenarioSpec(
-                name="cascading-auth-port-conflict",
+                name="cascading-auth-oom",
                 failure_type="adversarial",
                 namespace="auth",
                 deployment="auth-service",
                 root_cause="auth-service DB_HOST misconfigured, causing cascading failures. "
-                           "payment-api OOMs from retry storm — looks like memory issue but it's auth.",
+                           "payment-gateway OOMs from retry storm — looks like memory issue but it's auth.",
                 difficulty=difficulty,
-                alert_message="CRITICAL: Multiple services returning 500 errors, payment-api OOMKilled",
-                correct_fix_description="1. Fix auth-service DB_HOST, 2. Restore payment-api memory limits, 3. Restart payment-api",
+                alert_message="CRITICAL: Multiple services returning 500 errors, payment-gateway OOMKilled",
+                correct_fix_description="1. Fix auth-service DB_HOST, 2. Restore payment-gateway memory limits, 3. Restart payment-gateway",
                 steps=[
                     IncidentStep(
                         action="kubectl set env deployment/auth-service -n auth DB_HOST=wrong-host.invalid",
@@ -516,8 +492,8 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
                         is_root_cause=True,
                     ),
                     IncidentStep(
-                        action="kubectl set resources deployment/payment-api -n payments --limits=memory=16Mi",
-                        effect="payment-api OOMKills (looks like memory leak, actually retry storm)",
+                        action="kubectl set resources deployment/payment-gateway -n payments --limits=memory=16Mi",
+                        effect="payment-gateway OOMKills (looks like memory leak, actually retry storm)",
                         order=2,
                         is_root_cause=False,
                     ),
@@ -525,16 +501,16 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
                 diagnosis_steps=[
                     "kubectl get pods -A",
                     "kubectl get events -n payments",
-                    "kubectl describe pod payment-api -n payments",
+                    "kubectl describe pod payment-gateway -n payments",
                     "kubectl logs auth-service -n auth --tail=50",
                 ],
                 fix_steps=[
-                    "kubectl set env deployment/auth-service -n auth DB_HOST=token-store.auth.svc.cluster.local",
-                    "kubectl set resources deployment/payment-api -n payments --limits=memory=256Mi",
-                    "kubectl rollout restart deployment/payment-api -n payments",
+                    "kubectl set env deployment/auth-service -n auth DB_HOST=auth-db.auth.svc.cluster.local",
+                    "kubectl set resources deployment/payment-gateway -n payments --limits=memory=128Mi",
+                    "kubectl rollout restart deployment/payment-gateway -n payments",
                 ],
                 verify_steps=["kubectl get pods -A"],
-                red_herrings=["payment-api OOMKilled looks like a memory leak but is caused by auth retry storm"],
+                red_herrings=["payment-gateway OOMKilled looks like a memory leak but is caused by auth retry storm"],
                 expected_observation_hints=["OOMKilled", "connection refused", "500"],
                 expected_diagnostic_path=["kubectl get pods -A", "kubectl logs auth-service -n auth --tail=50"],
                 params={},
@@ -549,7 +525,7 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
                 root_cause="payment-api DB_HOST env var points to non-existent host",
                 difficulty=difficulty,
                 alert_message="CRITICAL: payment-api returning 500 errors on all requests",
-                correct_fix_description="Set DB_HOST back to postgres.payments.svc.cluster.local",
+                correct_fix_description="Set DB_HOST back to payment-db.payments.svc.cluster.local",
                 steps=[
                     IncidentStep(
                         action="kubectl set env deployment/payment-api -n payments DB_HOST=wrong-host.invalid",
@@ -564,7 +540,7 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
                     "kubectl describe pod payment-api -n payments",
                 ],
                 fix_steps=[
-                    "kubectl set env deployment/payment-api -n payments DB_HOST=postgres.payments.svc.cluster.local",
+                    "kubectl set env deployment/payment-api -n payments DB_HOST=payment-db.payments.svc.cluster.local",
                 ],
                 verify_steps=["kubectl get pods -n payments"],
                 red_herrings=[],

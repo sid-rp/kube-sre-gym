@@ -14,6 +14,7 @@ import time
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
+from .constants import MAX_STEPS
 
 try:
     from ..models import KubeSreGymAction, KubeSreGymObservation, KubeSreGymState
@@ -56,37 +57,56 @@ class KubeSreGymEnvironment(Environment):
 
         self.scenario = None
         self._step_count = 0
-        self.max_steps = int(os.environ.get("MAX_STEPS", "15"))
+        self.max_steps = int(os.environ.get("MAX_STEPS", str(MAX_STEPS)))
         self.history = []
         self._state = KubeSreGymState(episode_id=str(uuid4()), step_count=0)
 
+        # Always initialize both paths — curriculum may switch mid-training
+        self.designer = AdversarialDesigner(llm, self.backend, max_steps=self.max_steps)
+        self.generator = ScenarioGenerator(llm, mode=os.environ.get("GENERATOR_MODE", "simple"))
+
         if self.mode == "adversarial":
-            self.designer = AdversarialDesigner(llm, self.backend, max_steps=self.max_steps)
             self.judge = AdversarialJudge(llm)
-            self.generator = None
             logger.info("GYM_MODE=adversarial — LLM designs multi-step incidents")
         else:
-            self.designer = None
-            self.generator = ScenarioGenerator(llm, mode=os.environ.get("GENERATOR_MODE", "simple"))
             self.judge = LLMJudge(llm)
-            logger.info("GYM_MODE=standard — using scenario pool/generator")
+            logger.info("GYM_MODE=standard — curriculum-driven single-fault injection")
 
     def reset(self) -> KubeSreGymObservation:
+        # Step 1: Deploy clean healthy cluster (base manifests only)
         self.backend.reset()
 
         skill_profile = self.curriculum.get_skill_profile()
         difficulty = self.curriculum.get_difficulty()
 
-        if self.mode == "adversarial":
+        # Step 2: Curriculum decides what fault to inject
+        use_adversarial = (self.mode == "adversarial"
+                           or self.curriculum.should_use_adversarial())
+
+        if use_adversarial:
+            # Adversarial: LLM designs a targeted compound incident
+            logger.info(f"Episode {self.curriculum.episode_count + 1}: "
+                        f"adversarial mode (difficulty={difficulty:.2f}, "
+                        f"weak_spots={self.curriculum.get_weak_spots()})")
             self.scenario = self.designer.design(skill_profile, difficulty)
             self.designer.inject(self.scenario)
-            # If all injection steps failed, fall back to hardcoded scenario
             if getattr(self.scenario, '_inject_success_count', 0) == 0:
-                logger.warning("LLM scenario injection failed — using fallback scenario")
+                logger.warning("LLM scenario injection failed — using fallback")
                 self.scenario = self.designer._fallback_scenario(difficulty)
                 self.designer.inject(self.scenario)
+            # Switch to stricter judge for adversarial
+            if not isinstance(self.judge, AdversarialJudge):
+                self.judge = AdversarialJudge(LLMClient())
         else:
-            self.scenario = self.generator.generate(skill_profile, difficulty)
+            # Standard: curriculum picks ONE fault type, inject into clean cluster
+            fault_type = self.curriculum.pick_fault_type()
+            logger.info(f"Episode {self.curriculum.episode_count + 1}: "
+                        f"standard mode, fault='{fault_type}' "
+                        f"(difficulty={difficulty:.2f}, "
+                        f"graduated={self.curriculum.get_graduated()})")
+            self.scenario = self.generator.generate(
+                skill_profile, difficulty, fault_type_hint=fault_type
+            )
             self.backend.inject_failure(self.scenario.failure_type, self.scenario.params)
 
         self._step_count = 0

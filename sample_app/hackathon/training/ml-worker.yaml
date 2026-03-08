@@ -1,0 +1,42 @@
+# ml-worker: OOMKilled — python allocates too much memory
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-worker
+  namespace: hackathon
+  labels:
+    app: ml-worker
+    tier: worker
+    scenario: training
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-worker
+  template:
+    metadata:
+      labels:
+        app: ml-worker
+        tier: worker
+        scenario: training
+    spec:
+      containers:
+        - name: ml-worker
+          image: python:3.11-slim
+          command: ["python", "-c"]
+          args:
+            - |
+              import time
+              print("ml-worker: Initializing model inference pipeline...")
+              print("ml-worker: Loading embeddings into memory...")
+              # Allocate ~256MB which exceeds the 64Mi limit → OOMKilled
+              data = bytearray(256 * 1024 * 1024)
+              print("ml-worker: Ready for inference")
+              time.sleep(3600)
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

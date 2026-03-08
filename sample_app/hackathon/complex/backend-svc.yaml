@@ -1,0 +1,19 @@
+# backend-svc: Service with wrong targetPort — endpoints exist but traffic fails
+# Targets auth-service pods but uses port 9999 instead of 80
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-svc
+  namespace: hackathon
+  labels:
+    app: backend-svc
+    scenario: complex
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - port: 80
+      # BUG: auth-service listens on 80, but targetPort is wrong (9999)
+      targetPort: 9999
+      protocol: TCP
+  type: ClusterIP

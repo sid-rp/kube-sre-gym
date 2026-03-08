@@ -1,0 +1,13 @@
+# ConfigMap with wrong DATABASE_URL — order-service will crash on connection
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: hackathon
+  labels:
+    app: order-service
+    scenario: complex
+data:
+  DATABASE_URL: "postgres://wrong-host:5432/mydb"
+  LOG_LEVEL: "info"
+  MAX_RETRIES: "3"

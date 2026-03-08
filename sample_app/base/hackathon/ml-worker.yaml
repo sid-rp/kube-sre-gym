@@ -1,0 +1,38 @@
+# ml-worker: HEALTHY version — reasonable memory limits
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ml-worker
+  namespace: hackathon
+  labels:
+    app: ml-worker
+    tier: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ml-worker
+  template:
+    metadata:
+      labels:
+        app: ml-worker
+        tier: worker
+    spec:
+      containers:
+        - name: ml-worker
+          image: python:3.11-slim
+          command: ["python", "-c"]
+          args:
+            - |
+              import time
+              print("ml-worker: Inference pipeline ready")
+              while True:
+                  time.sleep(60)
+                  print("ml-worker: heartbeat")
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

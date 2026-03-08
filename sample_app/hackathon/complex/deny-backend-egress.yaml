@@ -1,0 +1,16 @@
+# NetworkPolicy: Block all egress from auth-service — silent failure, connections timeout
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-backend-egress
+  namespace: hackathon
+  labels:
+    scenario: complex
+spec:
+  podSelector:
+    matchLabels:
+      app: auth-service
+  policyTypes:
+    - Egress
+  # No egress rules = all egress blocked
+  egress: []

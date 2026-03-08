@@ -1,0 +1,50 @@
+# web-app (hackathon): ImagePullBackOff — nonexistent image tag
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  namespace: hackathon
+  labels:
+    app: web-app
+    tier: frontend
+    scenario: training
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-app
+  template:
+    metadata:
+      labels:
+        app: web-app
+        tier: frontend
+        scenario: training
+    spec:
+      containers:
+        - name: web-app
+          image: nginx:nonexistent-tag-v99
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app
+  namespace: hackathon
+  labels:
+    app: web-app
+spec:
+  selector:
+    app: web-app
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+  type: ClusterIP

@@ -1,0 +1,40 @@
+# payment-worker: CrashLoopBackOff — missing DATABASE_URL env var
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-worker
+  namespace: payments
+  labels:
+    app: payment-worker
+    tier: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-worker
+  template:
+    metadata:
+      labels:
+        app: payment-worker
+        tier: worker
+    spec:
+      containers:
+        - name: payment-worker
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              if [ -z "$DATABASE_URL" ]; then
+                echo "FATAL: DATABASE_URL not set — cannot connect to payment database"
+                exit 1
+              fi
+              echo "Worker started, processing payments..."
+              sleep 3600
+          # NOTE: DATABASE_URL is intentionally missing to cause CrashLoopBackOff
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

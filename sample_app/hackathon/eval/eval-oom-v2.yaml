@@ -1,0 +1,42 @@
+# eval-oom-v2: OOMKilled with even lower limit (32Mi)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eval-oom-v2
+  namespace: hackathon
+  labels:
+    app: eval-oom-v2
+    tier: eval
+    scenario: eval
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eval-oom-v2
+  template:
+    metadata:
+      labels:
+        app: eval-oom-v2
+        tier: eval
+        scenario: eval
+    spec:
+      containers:
+        - name: memory-hog
+          image: python:3.11-slim
+          command: ["python", "-c"]
+          args:
+            - |
+              import time
+              print("eval-oom-v2: Starting feature extraction pipeline...")
+              print("eval-oom-v2: Allocating feature vectors...")
+              # Allocate ~128MB which far exceeds the 32Mi limit → OOMKilled
+              data = bytearray(128 * 1024 * 1024)
+              print("eval-oom-v2: Features loaded")
+              time.sleep(3600)
+          resources:
+            requests:
+              cpu: 50m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi

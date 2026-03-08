@@ -1,0 +1,58 @@
+# payment-api: HEALTHY version — reasonable memory limits
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-api
+  namespace: payments
+  labels:
+    app: payment-api
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-api
+  template:
+    metadata:
+      labels:
+        app: payment-api
+        tier: api
+    spec:
+      containers:
+        - name: payment-api
+          image: python:3.11-slim
+          command: ["python", "-c"]
+          args:
+            - |
+              import http.server, time
+              print("payment-api: Ready, serving on port 8080")
+              server = http.server.HTTPServer(('', 8080), http.server.SimpleHTTPRequestHandler)
+              server.serve_forever()
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-api
+  namespace: payments
+spec:
+  selector:
+    app: payment-api
+  ports:
+    - port: 8080
+      targetPort: 8080
+  type: ClusterIP

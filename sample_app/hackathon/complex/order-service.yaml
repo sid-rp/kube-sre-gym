@@ -1,0 +1,66 @@
+# order-service: Starts but crashes on DB connection — wrong DATABASE_URL in ConfigMap
+# Two-step fix: (1) check logs to find connection error, (2) fix ConfigMap with correct host
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: hackathon
+  labels:
+    app: order-service
+    tier: service
+    scenario: complex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+        tier: service
+        scenario: complex
+    spec:
+      containers:
+        - name: order-service
+          image: python:3.11-slim
+          command: ["python", "-c"]
+          args:
+            - |
+              import os, time, sys
+              db_url = os.environ.get("DATABASE_URL", "not-set")
+              print(f"order-service: Starting with DATABASE_URL={db_url}")
+              print("order-service: Initializing connection pool...")
+              time.sleep(2)
+              print(f"order-service: FATAL — could not connect to database at '{db_url}'")
+              print("order-service: psycopg2.OperationalError: could not translate host name 'wrong-host' to address: Name or service not known")
+              sys.exit(1)
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: hackathon
+  labels:
+    app: order-service
+spec:
+  selector:
+    app: order-service
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
