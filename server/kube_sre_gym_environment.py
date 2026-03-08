@@ -199,7 +199,28 @@ class KubeSreGymEnvironment(Environment):
         self._state.step_count = self._step_count
         logger.info(f"  Step {self._step_count}/{self.max_steps}: {action.command}")
 
-        output = self.backend.execute(action.command)
+        # Strip "fix:" or "diagnose:" prefix before executing
+        raw_cmd = action.command.strip()
+        is_fix = raw_cmd.lower().startswith("fix:")
+        is_diagnose = raw_cmd.lower().startswith("diagnose:")
+
+        if is_fix:
+            exec_cmd = raw_cmd[4:].strip()
+        elif is_diagnose:
+            exec_cmd = raw_cmd[9:].strip()
+        else:
+            exec_cmd = raw_cmd
+
+        # Execute the kubectl command (if any remains after stripping prefix)
+        if exec_cmd and exec_cmd.startswith("kubectl"):
+            output = self.backend.execute(exec_cmd)
+        elif is_diagnose:
+            # "diagnose: <root cause>" — no command to execute, just the diagnosis text
+            output = f"Diagnosis submitted: {exec_cmd}"
+        elif is_fix and not exec_cmd.startswith("kubectl"):
+            output = f"Fix submitted but no kubectl command found. Use: fix: kubectl <command>"
+        else:
+            output = self.backend.execute(exec_cmd)
 
         # Penalize repeated commands (same command run before)
         repeat_count = sum(1 for h in self.history if h["command"] == action.command)
@@ -220,7 +241,7 @@ class KubeSreGymEnvironment(Environment):
 
         done = False
 
-        if action.command.startswith("fix:"):
+        if is_fix:
             # Allow rollout to progress before judging health (set/rollout/patch are async)
             for _ in range(3):
                 time.sleep(5)
@@ -300,7 +321,7 @@ class KubeSreGymEnvironment(Environment):
 
         # Only auto-fetch cluster summary after fix attempts or on done
         # Otherwise the agent should run its own diagnostic commands
-        if action.command.startswith("fix:") or done:
+        if is_fix or done:
             cluster_summary = self.backend.execute("kubectl get pods --all-namespaces")
         else:
             cluster_summary = ""
