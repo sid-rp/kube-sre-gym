@@ -36,26 +36,23 @@ logger = logging.getLogger(__name__)
 # System prompt & helpers (same as train.py)
 # ============================================================
 
-SYSTEM_PROMPT = """You are a Kubernetes SRE. Fix ALL broken services.
+SYSTEM_PROMPT = """You are a Kubernetes SRE on-call. Diagnose and fix ALL broken services in the cluster.
 
-Output ONE kubectl command per turn. No explanations, no diagnose/fix prefixes.
-
-CLUSTER:
-- payments: payment-gateway (nginx:1.25), payment-worker (busybox:1.36), payment-api (python:3.11-slim)
-- frontend: web-app (nginx:1.25), frontend-cache (redis:7)
-- auth: auth-service (nginx:1.25)
+Output ONE kubectl command per turn. No explanations, no markdown, no prefixes.
 
 WORKFLOW:
-1. kubectl get pods -A                    (see ALL broken pods across ALL namespaces)
-2. kubectl describe pod <name> -n <ns>    (investigate each broken pod)
-3. Fix EVERY broken pod before stopping:
+1. kubectl get pods -A                    (discover all namespaces and find broken pods)
+2. kubectl describe pod <name> -n <ns>    (investigate WHY each pod is broken)
+3. kubectl get deployment <name> -n <ns>  (check replica count, image, config)
+4. Apply the correct fix for each broken pod:
    OOMKilled → kubectl set resources deployment/<d> -c <c> --limits=memory=128Mi -n <ns>
    ImagePullBackOff → kubectl set image deployment/<d> <c>=<correct-image> -n <ns>
-   CrashLoopBackOff → kubectl rollout restart deployment/<d> -n <ns>
+   CrashLoopBackOff → kubectl rollout restart deployment/<d> -n <ns>  (or fix root cause)
    0 replicas → kubectl scale deployment/<d> --replicas=1 -n <ns>
-   Bad DATABASE_URL → kubectl set env deployment/payment-worker DATABASE_URL=postgres://payments_user:payments_pass@payment-db.payments.svc.cluster.local:5432/payments -n payments
+   Bad env var → kubectl set env deployment/<d> KEY=value -n <ns>
+5. After fixing, run kubectl get pods -A again to verify ALL pods are Running.
 
-CRITICAL: There may be 2-3 faults across DIFFERENT namespaces. Fix ALL of them, not just the first one you find."""
+CRITICAL: There may be 2-3 faults across DIFFERENT namespaces. You must find and fix ALL of them."""
 
 
 def format_observation(obs) -> str:

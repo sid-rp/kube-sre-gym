@@ -15,7 +15,7 @@ import time
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
-from .constants import MAX_STEPS, INJECT_VISIBILITY_MAX_POLLS, INJECT_VISIBILITY_INTERVAL
+from .constants import MAX_STEPS, INJECT_VISIBILITY_MAX_POLLS, INJECT_VISIBILITY_INTERVAL, HEALTHY_STATE
 
 try:
     from ..models import KubeSreGymAction, KubeSreGymObservation, KubeSreGymState
@@ -302,7 +302,18 @@ class KubeSreGymEnvironment(Environment):
                 total_count = len(statuses)
                 healthy_count = sum(1 for s in statuses if s in ("Running", "Completed"))
                 starting_count = sum(1 for s in statuses if s in STARTING_STATES)
-                all_healthy = healthy_count == total_count and total_count > 0
+
+                # Check that we have the EXPECTED number of pods, not just that
+                # existing pods are healthy. scale-to-zero or missing pods = not resolved.
+                expected_pods = 0
+                for ns, deploys in HEALTHY_STATE.items():
+                    if is_adversarial or ns == affected_ns or affected_ns is None:
+                        if ns in check_health:
+                            expected_pods += sum(d["replicas"] for d in deploys.values())
+                all_healthy = (healthy_count >= expected_pods
+                               and healthy_count == total_count
+                               and total_count > 0)
+
                 if all_healthy:
                     break
                 # If pods are still starting, keep waiting (up to 60s)
@@ -322,7 +333,7 @@ class KubeSreGymEnvironment(Environment):
                 feedback = f"Incident resolved! All pods healthy. (bonus: +{efficiency:.1f})"
             else:
                 # Partial progress feedback — tell agent how many pods are healthy
-                feedback += f" Fix applied. {healthy_count}/{total_count} pods healthy."
+                feedback += f" Fix applied. {healthy_count}/{expected_pods} expected pods healthy."
 
         if self._step_count >= self.max_steps:
             done = True
