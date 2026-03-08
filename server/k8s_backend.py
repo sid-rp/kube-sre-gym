@@ -193,8 +193,13 @@ class K8sBackend:
             events = self.v1.list_namespaced_event(ns)
         else:
             events = self.v1.list_event_for_all_namespaces()
+        # Sort by time; key is always str so we never mix None with datetime (avoids TypeError)
+        def _key(e):
+            t = e.last_timestamp or e.metadata.creation_timestamp
+            return getattr(t, "isoformat", lambda: "")() if t else "z"
+
         lines = ["LAST SEEN   TYPE      REASON           OBJECT              MESSAGE"]
-        for e in sorted(events.items, key=lambda x: x.metadata.creation_timestamp or "")[-20:]:
+        for e in sorted(events.items, key=_key)[-20:]:
             age = self._format_age(e.last_timestamp or e.metadata.creation_timestamp)
             etype = (e.type or "Normal")[:10].ljust(10)
             reason = (e.reason or "")[:17].ljust(17)
@@ -208,11 +213,12 @@ class K8sBackend:
         lines = ["NAME                    STATUS   ROLES    AGE   VERSION"]
         for n in nodes.items:
             name = n.metadata.name[:24].ljust(24)
-            conditions = {c.type: c.status for c in n.status.conditions}
+            conditions = {c.type: c.status for c in (n.status.conditions or [])}
             status = "Ready" if conditions.get("Ready") == "True" else "NotReady"
-            roles = ",".join(k.split("/")[-1] for k in n.metadata.labels if "node-role" in k) or "<none>"
+            labels = n.metadata.labels or {}
+            roles = ",".join(k.split("/")[-1] for k in labels if "node-role" in k) or "<none>"
             age = self._format_age(n.metadata.creation_timestamp)
-            version = n.status.node_info.kubelet_version
+            version = getattr(n.status.node_info, "kubelet_version", "") if n.status.node_info else ""
             lines.append(f"{name}{status.ljust(9)}{roles.ljust(9)}{age.ljust(6)}{version}")
         return "\n".join(lines)
 
@@ -271,9 +277,9 @@ class K8sBackend:
         lines = [
             f"Name:         {pod.metadata.name}",
             f"Namespace:    {pod.metadata.namespace}",
-            f"Node:         {pod.spec.node_name}",
+            f"Node:         {pod.spec.node_name or '<none>'}",
             f"Status:       {pod.status.phase}",
-            f"IP:           {pod.status.pod_ip}",
+            f"IP:           {pod.status.pod_ip or '<none>'}",
             f"Containers:"
         ]
         for c in pod.spec.containers:
@@ -281,12 +287,12 @@ class K8sBackend:
             lines.append(f"    Image:          {c.image}")
             cs = next((s for s in (pod.status.container_statuses or []) if s.name == c.name), None)
             if cs:
-                if cs.state.running:
+                if cs.state and cs.state.running:
                     lines.append(f"    State:          Running")
-                elif cs.state.waiting:
+                elif cs.state and cs.state.waiting:
                     lines.append(f"    State:          Waiting")
                     lines.append(f"      Reason:       {cs.state.waiting.reason}")
-                elif cs.state.terminated:
+                elif cs.state and cs.state.terminated:
                     lines.append(f"    State:          Terminated")
                     lines.append(f"      Reason:       {cs.state.terminated.reason}")
                     lines.append(f"      Exit Code:    {cs.state.terminated.exit_code}")
@@ -340,11 +346,13 @@ class K8sBackend:
             n = self.v1.read_node(name)
         except ApiException:
             return f'Error from server (NotFound): nodes "{name}" not found'
-        return f"Name:         {n.metadata.name}\nAllocatable:  cpu={n.status.allocatable.get('cpu')}, memory={n.status.allocatable.get('memory')}"
+        alloc = n.status.allocatable or {}
+        return f"Name:         {n.metadata.name}\nAllocatable:  cpu={alloc.get('cpu', '?')}, memory={alloc.get('memory', '?')}"
 
     def _format_probe(self, probe):
-        if probe.http_get:
-            return f"http-get {probe.http_get.path}:{probe.http_get.port} delay={probe.initial_delay_seconds}s period={probe.period_seconds}s"
+        if probe and probe.http_get:
+            p = probe.http_get
+            return f"http-get {p.path or '/'}:{p.port or 0} delay={probe.initial_delay_seconds or 0}s period={probe.period_seconds or 0}s"
         return "configured"
 
     def _cmd_logs(self, parts, ns):
@@ -356,7 +364,10 @@ class K8sBackend:
         container = None
         for i, p in enumerate(parts):
             if p.startswith("--tail="):
-                tail = int(p.split("=")[1])
+                try:
+                    tail = int(p.split("=")[1])
+                except (ValueError, IndexError):
+                    pass
             if p == "-c" and i + 1 < len(parts):
                 container = parts[i + 1]
 
@@ -538,7 +549,10 @@ class K8sBackend:
             if "/" in p:
                 deploy_name = p.split("/")[-1]
             if p.startswith("--replicas="):
-                replicas = int(p.split("=")[1])
+                try:
+                    replicas = int(p.split("=")[1])
+                except (ValueError, IndexError):
+                    return "error: --replicas must be an integer"
         if deploy_name and replicas is not None:
             try:
                 body = {"spec": {"replicas": replicas}}
