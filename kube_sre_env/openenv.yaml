@@ -1,6 +1,7 @@
 spec_version: 1
-name: k8s_sre_env
+name: kube_sre_env
 type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
+

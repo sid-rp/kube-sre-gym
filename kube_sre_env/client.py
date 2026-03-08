@@ -1,12 +1,18 @@
+"""Kube SRE Environment Client."""
+
 from typing import Dict
+
 from openenv.core.client_types import StepResult
-from openenv.core.env_server.types import State
-from openenv.core.env_client import EnvClient
+from openenv.core import EnvClient
+
 from .models import K8sSREAction, K8sSREObservation, K8sSREState
 
 
-class K8sSREEnv(EnvClient[K8sSREAction, K8sSREObservation, K8sSREState]):
-    """Client for the K8s SRE Environment.
+class K8sSREEnv(
+    EnvClient[K8sSREAction, K8sSREObservation, K8sSREState]
+):
+    """
+    Client for the K8s SRE Environment.
 
     Example:
         >>> with K8sSREEnv(base_url="http://localhost:8000") as client:
@@ -14,6 +20,14 @@ class K8sSREEnv(EnvClient[K8sSREAction, K8sSREObservation, K8sSREState]):
         ...     print(result.observation.command_output)
         ...     result = client.step(K8sSREAction(command="kubectl get pods -A"))
         ...     print(result.observation.command_output)
+
+    Example with Docker:
+        >>> client = K8sSREEnv.from_docker_image("kube_sre_env-env:latest")
+        >>> try:
+        ...     result = client.reset()
+        ...     result = client.step(K8sSREAction(command="kubectl get pods -A"))
+        ... finally:
+        ...     client.close()
     """
 
     def _step_payload(self, action: K8sSREAction) -> Dict:

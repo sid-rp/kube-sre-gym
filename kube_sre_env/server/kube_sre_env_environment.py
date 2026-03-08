@@ -1,9 +1,16 @@
+"""
+K8s SRE Environment Implementation.
+
+Agent diagnoses and fixes real GKE incidents with curriculum-driven difficulty.
+"""
+
 import os
 import logging
 from uuid import uuid4
+
 from openenv.core.env_server.interfaces import Environment
-from openenv.core.env_server.types import State
-from ..models import K8sSREAction, K8sSREObservation, K8sSREState, ScenarioSpec
+
+from models import K8sSREAction, K8sSREObservation, K8sSREState, ScenarioSpec
 from .llm_client import LLMClient
 from .k8s_backend import K8sBackend
 from .scenario_generator import ScenarioGenerator
@@ -13,7 +20,7 @@ from .judge import LLMJudge
 logger = logging.getLogger(__name__)
 
 
-class K8sEnvironment(Environment):
+class KubeSreEnvironment(Environment):
     """
     K8s SRE OpenEnv Environment — agent diagnoses and fixes real GKE incidents.
 

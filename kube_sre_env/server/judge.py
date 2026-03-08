@@ -1,6 +1,6 @@
 import logging
 from .llm_client import LLMClient
-from ..models import ScenarioSpec
+from models import ScenarioSpec
 
 logger = logging.getLogger(__name__)
 

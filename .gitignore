@@ -1,6 +1,7 @@
 # Secrets
 secrets.json
 .env
+!.env.example
 
 # Test scripts with credentials
 test_connection.py
@@ -13,6 +14,9 @@ __pycache__/
 dist/
 build/
 .eggs/
+
+# OpenEnv outputs
+outputs/
 
 # IDE
 .vscode/
