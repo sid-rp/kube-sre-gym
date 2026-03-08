@@ -14,6 +14,7 @@ Design principles (from ChaosEater, Chaos Mesh, Google SRE):
 
 import json
 import logging
+import random
 import time
 
 from .llm_client import LLMClient
@@ -31,19 +32,115 @@ logger = logging.getLogger(__name__)
 # ---- Steady-state: what "healthy" looks like ----
 HEALTHY_STATE = {
     "payments": {
-        "payment-api": {"image": "nginx:latest", "env": {"DB_HOST": "postgres.payments.svc.cluster.local", "REDIS_URL": "redis://redis.payments.svc.cluster.local:6379", "PORT": "8080"}, "memory_limit": "256Mi", "replicas": 2},
-        "redis": {"image": "redis:7-alpine", "env": {}, "memory_limit": "128Mi", "replicas": 1},
-        "postgres": {"image": "postgres:15-alpine", "env": {"POSTGRES_DB": "payments", "PGPORT": "5432"}, "memory_limit": "256Mi", "replicas": 1},
+        "payment-api": {"container_name": "payment-api", "image": "nginx:latest", "env": {"DB_HOST": "postgres.payments.svc.cluster.local", "REDIS_URL": "redis://redis.payments.svc.cluster.local:6379", "PORT": "8080"}, "memory_limit": "256Mi", "replicas": 2, "liveness_probe": {"path": "/health", "port": 8080}},
+        "redis": {"container_name": "redis", "image": "redis:7-alpine", "env": {}, "memory_limit": "128Mi", "replicas": 1, "liveness_probe": None},
+        "postgres": {"container_name": "postgres", "image": "postgres:15-alpine", "env": {"POSTGRES_DB": "payments", "PGPORT": "5432"}, "memory_limit": "256Mi", "replicas": 1, "liveness_probe": None},
     },
     "frontend": {
-        "web-frontend": {"image": "nginx:latest", "env": {"API_URL": "http://payment-api.payments.svc.cluster.local:8080", "PORT": "3000"}, "memory_limit": "128Mi", "replicas": 2},
-        "nginx-proxy": {"image": "nginx:latest", "env": {"UPSTREAM_PORT": "3000"}, "memory_limit": "64Mi", "replicas": 1},
+        "web-frontend": {"container_name": "web-frontend", "image": "nginx:latest", "env": {"API_URL": "http://payment-api.payments.svc.cluster.local:8080", "PORT": "3000"}, "memory_limit": "128Mi", "replicas": 2, "liveness_probe": {"path": "/health", "port": 3000}},
+        "nginx-proxy": {"container_name": "nginx-proxy", "image": "nginx:latest", "env": {"UPSTREAM_PORT": "3000"}, "memory_limit": "64Mi", "replicas": 1, "liveness_probe": None},
     },
     "auth": {
-        "auth-service": {"image": "nginx:latest", "env": {"DB_HOST": "token-store.auth.svc.cluster.local", "TOKEN_SECRET": "supersecret", "PORT": "8081"}, "memory_limit": "128Mi", "replicas": 2},
-        "token-store": {"image": "redis:7-alpine", "env": {}, "memory_limit": "64Mi", "replicas": 1},
+        "auth-service": {"container_name": "auth-service", "image": "nginx:latest", "env": {"DB_HOST": "token-store.auth.svc.cluster.local", "TOKEN_SECRET": "supersecret", "PORT": "8081"}, "memory_limit": "128Mi", "replicas": 2, "liveness_probe": {"path": "/health", "port": 8081}},
+        "token-store": {"container_name": "token-store", "image": "redis:7-alpine", "env": {}, "memory_limit": "64Mi", "replicas": 1, "liveness_probe": None},
     },
 }
+
+
+# ---- Simple single-fault scenarios for warmup / beginner tiers ----
+# These don't need the LLM — they're predictable and easy to diagnose.
+WARMUP_SCENARIOS = [
+    {
+        "name": "wrong-db-host-payments",
+        "namespace": "payments",
+        "deployment": "payment-api",
+        "root_cause": "payment-api DB_HOST env var points to non-existent host",
+        "alert_message": "CRITICAL: payment-api returning 500 errors on all requests",
+        "correct_fix_description": "Set DB_HOST back to postgres.payments.svc.cluster.local",
+        "steps": [{"action": "kubectl set env deployment/payment-api -n payments DB_HOST=wrong-host.invalid",
+                    "effect": "payment-api cannot connect to database"}],
+        "diagnosis_steps": ["kubectl get pods -n payments", "kubectl logs payment-api -n payments --tail=50"],
+        "fix_steps": ["kubectl set env deployment/payment-api -n payments DB_HOST=postgres.payments.svc.cluster.local"],
+        "verify_steps": ["kubectl get pods -n payments"],
+        "red_herrings": [],
+        "expected_observation_hints": ["connection refused", "host not found"],
+    },
+    {
+        "name": "oom-kill-payment-api",
+        "namespace": "payments",
+        "deployment": "payment-api",
+        "root_cause": "payment-api memory limit set too low, causing OOMKill",
+        "alert_message": "CRITICAL: payment-api pods OOMKilled, service unavailable",
+        "correct_fix_description": "Increase memory limits on payment-api back to 256Mi",
+        "steps": [{"action": "kubectl set resources deployment/payment-api -n payments --limits=memory=4Mi",
+                    "effect": "payment-api OOMKilled (exit code 137)"}],
+        "diagnosis_steps": ["kubectl get pods -n payments", "kubectl describe pod payment-api -n payments"],
+        "fix_steps": ["kubectl set resources deployment/payment-api -n payments --limits=memory=256Mi"],
+        "verify_steps": ["kubectl get pods -n payments"],
+        "red_herrings": [],
+        "expected_observation_hints": ["OOMKilled", "exit code 137"],
+    },
+    {
+        "name": "bad-image-web-frontend",
+        "namespace": "frontend",
+        "deployment": "web-frontend",
+        "root_cause": "web-frontend image tag changed to nonexistent version",
+        "alert_message": "WARNING: web-frontend pods stuck in ImagePullBackOff",
+        "correct_fix_description": "Set image back to nginx:latest",
+        "steps": [{"action": "kubectl set image deployment/web-frontend -n frontend web-frontend=nginx:nonexistent-tag-99999",
+                    "effect": "web-frontend ImagePullBackOff"}],
+        "diagnosis_steps": ["kubectl get pods -n frontend", "kubectl describe pod web-frontend -n frontend"],
+        "fix_steps": ["kubectl set image deployment/web-frontend -n frontend web-frontend=nginx:latest"],
+        "verify_steps": ["kubectl get pods -n frontend"],
+        "red_herrings": [],
+        "expected_observation_hints": ["ImagePullBackOff", "ErrImagePull"],
+    },
+    {
+        "name": "wrong-auth-db-host",
+        "namespace": "auth",
+        "deployment": "auth-service",
+        "root_cause": "auth-service DB_HOST env var points to wrong host",
+        "alert_message": "CRITICAL: auth-service returning 500 errors, login failures",
+        "correct_fix_description": "Set DB_HOST back to token-store.auth.svc.cluster.local",
+        "steps": [{"action": "kubectl set env deployment/auth-service -n auth DB_HOST=wrong-host.invalid",
+                    "effect": "auth-service cannot connect to token store"}],
+        "diagnosis_steps": ["kubectl get pods -n auth", "kubectl logs auth-service -n auth --tail=50"],
+        "fix_steps": ["kubectl set env deployment/auth-service -n auth DB_HOST=token-store.auth.svc.cluster.local"],
+        "verify_steps": ["kubectl get pods -n auth"],
+        "red_herrings": [],
+        "expected_observation_hints": ["connection refused", "host not found"],
+    },
+    {
+        "name": "scaled-to-zero-redis",
+        "namespace": "payments",
+        "deployment": "redis",
+        "root_cause": "redis scaled to zero replicas, payment-api has no cache backend",
+        "alert_message": "WARNING: redis has 0 pods, payment-api reporting connection errors",
+        "correct_fix_description": "Scale redis back to 1 replica",
+        "steps": [{"action": "kubectl scale deployment/redis -n payments --replicas=0",
+                    "effect": "redis has no running pods"}],
+        "diagnosis_steps": ["kubectl get pods -n payments", "kubectl get deploy -n payments"],
+        "fix_steps": ["kubectl scale deployment/redis -n payments --replicas=1"],
+        "verify_steps": ["kubectl get pods -n payments"],
+        "red_herrings": [],
+        "expected_observation_hints": ["0/0", "connection refused"],
+    },
+    {
+        "name": "wrong-port-web-frontend",
+        "namespace": "frontend",
+        "deployment": "web-frontend",
+        "root_cause": "web-frontend PORT env var changed, readiness probe fails on wrong port",
+        "alert_message": "WARNING: web-frontend pods not ready, 502 errors from nginx-proxy",
+        "correct_fix_description": "Set PORT back to 3000",
+        "steps": [{"action": "kubectl set env deployment/web-frontend -n frontend PORT=9999",
+                    "effect": "web-frontend readiness probe fails, service returns 502"}],
+        "diagnosis_steps": ["kubectl get pods -n frontend", "kubectl describe pod web-frontend -n frontend"],
+        "fix_steps": ["kubectl set env deployment/web-frontend -n frontend PORT=3000"],
+        "verify_steps": ["kubectl get pods -n frontend"],
+        "red_herrings": [],
+        "expected_observation_hints": ["not ready", "502"],
+    },
+]
 
 
 ADVERSARIAL_DESIGNER_PROMPT = """You are a Kubernetes chaos engineer designing realistic production
@@ -120,6 +217,14 @@ Use ONLY these inject/fix pairs. Each shows the exact kubectl syntax.
 
 STEP 4 — DESIGN THE INCIDENT
 
+HARD CONSTRAINTS — the scenario MUST be solvable:
+- At most {max_mutations} injected faults (inject_commands). Never exceed this.
+- Each inject_command MUST have exactly one corresponding entry in fix_steps (the reversal).
+- fix_steps count MUST NOT exceed {max_fix_steps}.
+- Every deployment and namespace referenced MUST exist in the topology above.
+- Use container names from the healthy baseline (container_name field) for set image commands.
+- Keep it simple enough that a methodical agent can solve it within {max_steps} steps total.
+
 Think about this before generating:
 - What is the ONE root cause? (pick from fault types above)
 - What cascading effects does it cause? (e.g., auth down → payment-api retries → OOM)
@@ -167,15 +272,78 @@ class AdversarialDesigner:
         self.max_steps = max_steps
 
     def design(self, skill_profile: dict, difficulty: float) -> AdversarialScenarioSpec:
-        """Ask the LLM to design a complex incident based on agent's skill gaps.
+        """Design an incident appropriate for the agent's current skill level.
+
+        - difficulty < 0.4: pick from WARMUP_SCENARIOS (no LLM call, fast, predictable)
+        - difficulty >= 0.4: use LLM to design progressively harder incidents
 
         Uses progressive context enrichment (ChaosEater pattern):
         topology + healthy baseline + current health → scenario design.
         """
-        # Budget: reserve ~7 steps for triage+investigation+verify
-        max_fix_steps = max(1, self.max_steps - 7)
-        # Scale mutations with difficulty: easy=1, medium=2, hard=3-4
-        max_mutations = min(4, max(1, int(1 + difficulty * 3)))
+        # Low difficulty → use simple hardcoded scenarios (warmup + beginner tiers)
+        # Only start using LLM-designed incidents at intermediate tier and above
+        if difficulty <= 0.4:
+            return self._design_warmup(skill_profile, difficulty)
+
+        return self._design_llm(skill_profile, difficulty)
+
+    def _design_warmup(self, skill_profile: dict, difficulty: float) -> AdversarialScenarioSpec:
+        """Pick a simple single-fault scenario from the warmup pool.
+
+        Prefers scenarios the agent hasn't solved yet, or ones it's weak at.
+        """
+        solved = set(skill_profile.keys()) if skill_profile else set()
+        # Prefer unsolved scenarios
+        unsolved = [s for s in WARMUP_SCENARIOS if f"adversarial:{s['name']}" not in solved]
+        pool = unsolved if unsolved else WARMUP_SCENARIOS
+
+        # If there are weak spots, prefer scenarios targeting those failure types
+        if skill_profile:
+            weak_names = {k for k, v in skill_profile.items() if v < 0.5}
+            # Match by namespace/deployment mentioned in the weak scenario names
+            weak_pool = [s for s in pool if f"adversarial:{s['name']}" in weak_names]
+            if weak_pool:
+                pool = weak_pool
+
+        chosen = random.choice(pool)
+        steps = [IncidentStep(action=s["action"], effect=s["effect"], order=i+1, is_root_cause=(i == 0))
+                 for i, s in enumerate(chosen["steps"])]
+
+        scenario = AdversarialScenarioSpec(
+            name=chosen["name"],
+            failure_type="adversarial",
+            namespace=chosen["namespace"],
+            deployment=chosen["deployment"],
+            root_cause=chosen["root_cause"],
+            difficulty=difficulty,
+            alert_message=chosen["alert_message"],
+            correct_fix_description=chosen["correct_fix_description"],
+            steps=steps,
+            diagnosis_steps=chosen["diagnosis_steps"],
+            fix_steps=chosen["fix_steps"],
+            verify_steps=chosen["verify_steps"],
+            red_herrings=chosen.get("red_herrings", []),
+            expected_observation_hints=chosen["expected_observation_hints"],
+            expected_diagnostic_path=chosen["diagnosis_steps"],
+            params={},
+        )
+        logger.info(f"Warmup scenario selected: {scenario.name} (difficulty={difficulty:.2f})")
+        return scenario
+
+    def _design_llm(self, skill_profile: dict, difficulty: float) -> AdversarialScenarioSpec:
+        """Use the LLM to design a harder incident based on agent's skill gaps."""
+        # Budget: reserve ~7 steps for triage+investigation+verify, leave rest for fixes
+        max_fix_steps = max(1, min(6, self.max_steps - 7))
+        # Scale mutations with difficulty tier:
+        #   intermediate (0.4-0.6): 1 fault
+        #   advanced     (0.6-0.8): 2 faults
+        #   expert       (0.8+):    3 faults
+        if difficulty < 0.6:
+            max_mutations = 1
+        elif difficulty < 0.8:
+            max_mutations = 2
+        else:
+            max_mutations = 3
 
         cluster_state = self.backend.check_health()
         weak_spots = [k for k, v in skill_profile.items() if v < 0.5] if skill_profile else []
@@ -196,7 +364,7 @@ Agent skill profile: {json.dumps(skill_profile) if skill_profile else "no histor
 Weak spots to exploit: {weak_spots if weak_spots else "any — agent is new"}
 Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "none"}
 
-{"IMPORTANT: Make it HARDER than basic single-fault scenarios. Use compound failures — e.g., wrong DB host causing retry storm that OOMs another service, or port conflict between two services." if difficulty > 0.5 else "Start with a clear single-fault scenario. One root cause, one cascading effect."}
+{"Design a complex multi-fault incident with " + str(max_mutations) + " faults. Use cascading failures across namespaces — e.g., auth DB misconfigured causing retry storms that OOM payment-api, plus a port conflict. Include red herrings." if difficulty > 0.7 else "Use at most " + str(max_mutations) + " fault(s). One root cause with clear cascading effects. Keep it solvable within the step budget." if difficulty > 0.5 else "Start with a single-fault scenario. One root cause, clear symptoms."}
 
 {"Focus on these weak areas: " + ", ".join(weak_spots) if weak_spots else ""}"""
 
@@ -290,8 +458,13 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
         return "\n".join(results)
 
     def _parse_scenario(self, data: dict, difficulty: float) -> AdversarialScenarioSpec:
-        """Convert LLM JSON response into AdversarialScenarioSpec."""
+        """Convert LLM JSON response into AdversarialScenarioSpec.
+
+        Enforces solvability constraints: max 2 inject commands, fix_steps
+        must not exceed inject count, all targets must be valid.
+        """
         inject_commands = data.get("inject_commands", [])
+        fix_steps = data.get("fix_steps", [])[:len(inject_commands)]  # at most 1 fix per fault
         hints = data.get("expected_observation_hints", [])
         steps = []
         for i, cmd in enumerate(inject_commands):
@@ -313,7 +486,7 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
             correct_fix_description=data.get("correct_fix_description", ""),
             steps=steps,
             diagnosis_steps=data.get("diagnosis_steps", []),
-            fix_steps=data.get("fix_steps", []),
+            fix_steps=fix_steps,
             verify_steps=data.get("verify_steps", []),
             red_herrings=data.get("red_herrings", []),
             expected_observation_hints=hints,

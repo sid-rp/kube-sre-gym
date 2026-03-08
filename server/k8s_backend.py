@@ -606,7 +606,9 @@ class K8sBackend:
         return f"Unknown failure type: {failure_type}"
 
     def _inject_oom(self, ns, deploy):
-        self._set_resources([f"deployment/{deploy}", "-c", deploy.split("-")[0],
+        from .adversarial_designer import HEALTHY_STATE
+        container_name = HEALTHY_STATE.get(ns, {}).get(deploy, {}).get("container_name", deploy)
+        self._set_resources([f"deployment/{deploy}", "-c", container_name,
                            "--limits=memory=4Mi"], ns)
         time.sleep(8)
         return f"Injected OOMKill on {deploy} in {ns}"
@@ -639,9 +641,17 @@ class K8sBackend:
     def _inject_liveness_probe(self, ns, deploy):
         try:
             d = self.apps_v1.read_namespaced_deployment(deploy, ns)
+            changed = False
             for c in d.spec.template.spec.containers:
                 if c.liveness_probe and c.liveness_probe.http_get:
                     c.liveness_probe.http_get.path = "/nonexistent-health-check"
+                    changed = True
+            if not changed:
+                logger.warning(
+                    "liveness_probe scenario: deployment %s/%s has no httpGet liveness probe — no fault injected",
+                    ns, deploy,
+                )
+                return f"Warning: {deploy} in {ns} has no liveness probe; scenario had no effect."
             self.apps_v1.replace_namespaced_deployment(deploy, ns, d)
             time.sleep(15)
             return f"Injected liveness probe failure on {deploy} in {ns}"
@@ -689,6 +699,7 @@ class K8sBackend:
                     continue
 
                 try:
+                    probe_spec = spec.get("liveness_probe")
                     for c in deploy.spec.template.spec.containers:
                         # Restore image
                         c.image = spec["image"]
@@ -701,6 +712,19 @@ class K8sBackend:
                         # Remove any injected bad commands
                         c.command = None
                         c.args = None
+                        # Restore liveness probe from HEALTHY_STATE
+                        if probe_spec:
+                            c.liveness_probe = client.V1Probe(
+                                http_get=client.V1HTTPGetAction(
+                                    path=probe_spec["path"],
+                                    port=probe_spec["port"],
+                                ),
+                                initial_delay_seconds=10,
+                                period_seconds=10,
+                            )
+                        elif c.liveness_probe:
+                            # Deployment shouldn't have a probe — remove any injected one
+                            c.liveness_probe = None
 
                     # Restore replicas
                     deploy.spec.replicas = spec["replicas"]

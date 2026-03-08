@@ -10,6 +10,7 @@ Modes (set via GYM_MODE env var):
 
 import os
 import logging
+import time
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
@@ -147,13 +148,18 @@ class KubeSreGymEnvironment(Environment):
         done = False
 
         if action.command.startswith("fix:"):
-            health = self.backend.check_health()
-            healthy_count = sum(
-                1 for ns_pods in health.values() for s in ns_pods.values()
-                if s in ("Running", "Completed")
-            )
-            total_count = sum(len(ns_pods) for ns_pods in health.values())
-            all_healthy = healthy_count == total_count and total_count > 0
+            # Allow rollout to progress before judging health (set/rollout/patch are async)
+            for _ in range(3):
+                time.sleep(5)
+                health = self.backend.check_health()
+                healthy_count = sum(
+                    1 for ns_pods in health.values() for s in ns_pods.values()
+                    if s in ("Running", "Completed")
+                )
+                total_count = sum(len(ns_pods) for ns_pods in health.values())
+                all_healthy = healthy_count == total_count and total_count > 0
+                if all_healthy:
+                    break
 
             if all_healthy:
                 done = True

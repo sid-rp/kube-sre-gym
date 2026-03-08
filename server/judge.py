@@ -158,8 +158,8 @@ class AdversarialJudge(LLMJudge):
             return True
 
         max_past_order = max(_PHASE_ORDER.get(p, 0) for p in past_phases)
-        # Allow same phase or next phase, not jumping ahead by more than 1
-        return current_order >= max_past_order - 1
+        # Allow same phase, going back, or advancing by at most 1 phase
+        return current_order <= max_past_order + 1
 
     def _get_skipped_phases(self, current_phase: str, history: list) -> list[str]:
         """Return list of phases that were skipped."""
@@ -176,11 +176,31 @@ class AdversarialJudge(LLMJudge):
                 skipped.append(phase)
         return skipped
 
+    # K8s-specific terms that indicate a red herring symptom in command output
+    _RED_HERRING_TERMS = {
+        "oomkilled", "oomkill", "exit code 137", "memory leak",
+        "imagepullbackoff", "errimagepull", "crashloopbackoff",
+        "connection refused", "host not found", "502", "503", "500",
+        "timeout", "retry storm", "port conflict",
+    }
+
     def _touches_red_herring(self, command: str, output: str, scenario: AdversarialScenarioSpec) -> bool:
-        """Check if the command output relates to a known red herring."""
+        """Check if the command output relates to a known red herring.
+
+        Uses two-tier matching: first checks for K8s-specific symptom terms,
+        then requires at least 2 meaningful words from the herring description
+        to match in the output, avoiding false positives from common words.
+        """
+        output_lower = output.lower()
         for herring in scenario.red_herrings:
-            herring_keywords = herring.lower().split()
-            output_lower = output.lower()
-            if any(kw in output_lower for kw in herring_keywords if len(kw) > 3):
+            herring_lower = herring.lower()
+            # Tier 1: check for known K8s symptom terms in both herring and output
+            for term in self._RED_HERRING_TERMS:
+                if term in herring_lower and term in output_lower:
+                    return True
+            # Tier 2: require at least 2 meaningful (6+ char) words to match
+            herring_keywords = [w for w in herring_lower.split() if len(w) >= 6]
+            matches = sum(1 for kw in herring_keywords if kw in output_lower)
+            if matches >= 2:
                 return True
         return False
