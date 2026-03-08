@@ -363,6 +363,9 @@ class KubeSreGymEnvironment(Environment):
                         f"tier={self.curriculum.get_tier_name()} | "
                         f"difficulty={self.curriculum.get_difficulty():.2f} ===")
 
+            # Mark episode as complete so _do_reset() doesn't double-log as ABANDONED
+            self._step_count = 0
+
             # Save episode transcript to JSONL
             try:
                 transcript = {
