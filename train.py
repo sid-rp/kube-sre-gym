@@ -546,6 +546,7 @@ def main() -> None:
         gradient_checkpointing_kwargs={"use_reentrant": False},
         push_to_hub=args.push_to_hub,
         hub_model_id=args.hub_repo if args.push_to_hub else None,
+        hub_strategy="every_save",  # push each checkpoint to HF, not just final
         save_total_limit=3,  # keep last 3 checkpoints to save disk
         # DAPO-style improvements over vanilla GRPO:
         loss_type="dapo",  # asymmetric clipping + dynamic sampling
