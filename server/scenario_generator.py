@@ -37,12 +37,12 @@ SCENARIO_POOL = [
         expected_diagnostic_path=["kubectl get pods -n frontend", "kubectl describe pod web-app -n frontend"],
     ),
     ScenarioSpec(
-        failure_type="bad_config", namespace="payments", deployment="payment-api",
-        params={"namespace": "payments", "deployment": "payment-api"},
-        root_cause="DB_HOST env var changed to invalid host",
-        difficulty=0.4, alert_message="CRITICAL: payment-api returning 500 errors",
-        correct_fix_description="Set DB_HOST back to correct postgres host",
-        expected_diagnostic_path=["kubectl get pods -n payments", "kubectl logs payment-api -n payments"],
+        failure_type="bad_config", namespace="payments", deployment="payment-worker",
+        params={"namespace": "payments", "deployment": "payment-worker"},
+        root_cause="DATABASE_URL env var changed to invalid host, worker can't connect",
+        difficulty=0.4, alert_message="CRITICAL: payment-worker CrashLoopBackOff, connection errors in logs",
+        correct_fix_description="Set DATABASE_URL back to correct postgres connection string",
+        expected_diagnostic_path=["kubectl get pods -n payments", "kubectl logs payment-worker -n payments"],
     ),
     ScenarioSpec(
         failure_type="liveness_probe", namespace="frontend", deployment="web-app",

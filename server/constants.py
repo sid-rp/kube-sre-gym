@@ -8,9 +8,9 @@ Imported by k8s_backend, scenario_generator, adversarial_designer, and environme
 # ---- Cluster topology: namespace -> deployments ----
 # Must match sample_app/base/ manifests
 TOPOLOGY = {
-    "payments": ["payment-gateway", "payment-db", "payment-worker", "payment-api"],
+    "payments": ["payment-gateway", "payment-worker", "payment-api"],
     "frontend": ["web-app", "frontend-cache"],
-    "auth": ["auth-service", "auth-db"],
+    "auth": ["auth-service"],
 }
 
 APP_NAMESPACES = ["payments", "frontend", "auth", "hackathon"]
@@ -40,37 +40,31 @@ INJECTABLE_FAILURES = {
 #   replicas        — correct replica count
 #   liveness_probe  — {path, port} if deployment has one, else None
 HEALTHY_STATE = {
+    # NOTE: Must match sample_app/base/ manifests exactly.
+    # payment-db and auth-db are StatefulSets — not managed by reset().
     "payments": {
         "payment-gateway": {
             "container_name": "payment-gateway", "image": "nginx:1.25",
             "env": {}, "memory_limit": "128Mi", "replicas": 2,
-            "liveness_probe": {"path": "/health", "port": 8080},
-        },
-        "payment-db": {
-            "container_name": "payment-db", "image": "postgres:15",
-            "env": {"POSTGRES_DB": "payments", "POSTGRES_USER": "payments_user"},
-            "memory_limit": "512Mi", "replicas": 1,
-            "liveness_probe": None,
+            "liveness_probe": {"path": "/", "port": 80},
         },
         "payment-worker": {
             "container_name": "payment-worker", "image": "busybox:1.36",
-            "env": {"DATABASE_URL": "postgres://payment-db.payments.svc.cluster.local:5432/payments"},
+            "env": {"DATABASE_URL": "postgres://payments_user:payments_pass@payment-db.payments.svc.cluster.local:5432/payments"},
             "memory_limit": "64Mi", "replicas": 1,
             "liveness_probe": None,
         },
         "payment-api": {
             "container_name": "payment-api", "image": "python:3.11-slim",
-            "env": {"DB_HOST": "payment-db.payments.svc.cluster.local", "PORT": "8080"},
-            "memory_limit": "64Mi", "replicas": 1,
-            "liveness_probe": {"path": "/health", "port": 8080},
+            "env": {}, "memory_limit": "256Mi", "replicas": 1,
+            "liveness_probe": {"path": "/", "port": 8080},
         },
     },
     "frontend": {
         "web-app": {
             "container_name": "web-app", "image": "nginx:1.25",
-            "env": {"API_URL": "http://payment-api.payments.svc.cluster.local:8080", "PORT": "3000"},
-            "memory_limit": "128Mi", "replicas": 2,
-            "liveness_probe": {"path": "/health", "port": 3000},
+            "env": {}, "memory_limit": "128Mi", "replicas": 2,
+            "liveness_probe": {"path": "/", "port": 80},
         },
         "frontend-cache": {
             "container_name": "frontend-cache", "image": "redis:7",
@@ -81,15 +75,8 @@ HEALTHY_STATE = {
     "auth": {
         "auth-service": {
             "container_name": "auth-service", "image": "nginx:1.25",
-            "env": {"DB_HOST": "auth-db.auth.svc.cluster.local", "TOKEN_SECRET": "supersecret", "PORT": "8081"},
-            "memory_limit": "128Mi", "replicas": 2,
-            "liveness_probe": {"path": "/health", "port": 8081},
-        },
-        "auth-db": {
-            "container_name": "auth-db", "image": "postgres:15",
-            "env": {"POSTGRES_DB": "auth", "POSTGRES_USER": "auth_user"},
-            "memory_limit": "512Mi", "replicas": 1,
-            "liveness_probe": None,
+            "env": {}, "memory_limit": "128Mi", "replicas": 2,
+            "liveness_probe": {"path": "/", "port": 80},
         },
     },
 }
