@@ -212,7 +212,8 @@ class K8sBackend:
                     p.metadata.name: _pod_status(p)
                     for p in pods.items
                 }
-            except ApiException:
+            except ApiException as e:
+                logger.error(f"check_health: failed to list pods in '{ns}': {e.reason}")
                 health[ns] = {}
         return health
 
