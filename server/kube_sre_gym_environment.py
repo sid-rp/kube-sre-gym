@@ -260,18 +260,24 @@ class KubeSreGymEnvironment(Environment):
         else:
             output = "error: only kubectl commands, 'diagnose: <text>', and 'fix: kubectl <cmd>' are supported."
 
-        # Penalize repeated commands (same command run before)
+        # Penalize repeated commands — escalating penalty + circuit breaker at 3x
         repeat_count = sum(1 for h in self.history if h["command"] == action.command)
 
-        persona = self.curriculum.get_judge_persona()
-        reward, feedback = self.judge.evaluate(
-            action.command, output, self.scenario, self.history, persona
-        )
+        if repeat_count >= 2:
+            # Circuit breaker: block after 2 repeats, override output with hint
+            output = (f"BLOCKED: You already tried this command {repeat_count + 1} times. "
+                      "Try a different approach or check a different namespace.")
+            reward = -0.5
+            feedback = "Command blocked — repeated too many times."
+        else:
+            persona = self.curriculum.get_judge_persona()
+            reward, feedback = self.judge.evaluate(
+                action.command, output, self.scenario, self.history, persona
+            )
 
-        if repeat_count > 0:
-            penalty = min(0.5, repeat_count * 0.15)
-            reward -= penalty
-            feedback += f" Repeated command ({repeat_count + 1}x)."
+        if repeat_count == 1:
+            reward -= 0.3
+            feedback += " Repeated command (2x) — try a different approach."
 
         # Log AFTER all reward adjustments so the displayed reward matches reality
         logger.info(f"    -> reward={reward:.2f} | {feedback[:80]}")

@@ -13,11 +13,49 @@ tags:
 
 # Kube SRE Gym
 
-**A self-improving Kubernetes SRE agent trained on real cluster incidents using GRPO.**
+### Can a 0.6B model learn to be an on-call SRE — from scratch?
 
-An RL agent learns to diagnose and fix production Kubernetes failures — OOMKills, CrashLoopBackOffs, bad images, misconfigured env vars — by operating on a **real GKE cluster**, not a simulator. An LLM judge scores each action, a curriculum controller escalates difficulty, and an adversarial designer creates novel multi-fault incidents. The agent improves through Group Relative Policy Optimization (GRPO).
+We gave a tiny language model a pager, a live Kubernetes cluster, and zero knowledge of what a pod even is. No pre-training on DevOps docs. No few-shot examples. Just a PagerDuty alert and a `kubectl` prompt.
+
+Within 8 episodes, it learned to discover namespaces, read pod statuses, identify OOMKills from CrashLoopBackOffs, and apply the correct fix. By episode 4, it was resolving incidents faster than our hand-written baselines.
+
+**This is Kube SRE Gym** — a self-improving environment where an RL agent learns to diagnose and fix real production Kubernetes failures through adversarial self-play, curriculum-driven difficulty, and GRPO.
 
 > **OpenEnv Hackathon Submission** | Built with [OpenEnv v0.2.1](https://github.com/meta-pytorch/OpenEnv/tree/v0.2.1) | Deployed on [HF Spaces](https://huggingface.co/spaces/openenv-community/kube-sre-gym) | Training via [HF TRL](https://github.com/huggingface/trl) in [Colab](kube_sre_gym_colab.ipynb)
+
+---
+
+## The Story: From Blind to On-Call
+
+### Act 1: The Cold Start
+
+Episode 1. The agent receives its first alert: *"CRITICAL: payment-gateway pods OOMKilled in payments namespace."*
+
+It has never seen Kubernetes before. It doesn't know what namespaces are, what pods look like, or that `kubectl` even exists. It tries random commands. Everything fails. Reward: **-2.0**.
+
+### Act 2: First Light
+
+Episode 4. Something clicks. The agent discovers `kubectl get pods -A` — a single command that reveals the entire cluster. It sees `OOMKilled` in the STATUS column. It connects this to the alert. It runs `kubectl set resources deployment/payment-gateway --limits=memory=128Mi -n payments`.
+
+The pod restarts. The health check passes. The LLM judge confirms resolution. Reward: **+3.95**.
+
+### Act 3: The Environment Fights Back
+
+As the agent masters simple faults, the **Adversarial Designer** (Claude) notices. It starts creating compound incidents — an OOMKill in `payments` *and* a bad image in `frontend` simultaneously. Red herrings appear. The agent must learn to triage, not just react.
+
+The **Curriculum Controller** tracks per-fault-type mastery and escalates: warmup → beginner → intermediate → advanced → expert. The training distribution adapts in real-time. No scenario is ever repeated.
+
+### Act 4: The Environment Improves Itself
+
+Here's what made this project different from what we planned: **the environment itself had bugs that training exposed.**
+
+During training, we discovered our kubectl command parser only accepted `deployment/name` format (with a slash). The model kept sending perfectly valid `kubectl scale deployment frontend-cache --replicas=1` — and the environment rejected it every time. The model was right. Our environment was wrong.
+
+We also found the LLM judge was truncating cluster snapshots at 2000 chars, cutting off pods alphabetically after `payment-*`. And a race condition between health checks and judge API calls was causing false negatives — pods would appear healthy during the health check but unhealthy by the time the judge snapshot ran.
+
+**The agent's failures taught us to fix the environment.** This is the self-improvement loop we didn't expect — not just the model getting better, but the training infrastructure co-evolving with it.
+
+---
 
 ## Problem Statements Addressed
 
@@ -28,6 +66,7 @@ Kube SRE Gym is an environment where the agent **generates its own challenges, e
 - **Adversarial self-play**: Claude designs incidents that target the agent's tracked weaknesses
 - **Automatic curriculum**: Difficulty escalates as per-fault-type mastery improves (warmup → beginner → intermediate → advanced → expert)
 - **No manual authoring**: The training distribution adapts as the agent learns — infinite novel scenarios
+- **Co-evolutionary improvement**: Training runs exposed environment bugs, making the platform itself better
 
 ### Secondary: Statement 3.1 — World Modeling / Professional Tasks
 
@@ -45,6 +84,8 @@ The LLM judge uses **three expert personas** (Junior, Senior, Principal) with pr
 - **Senior**: Standard SRE expectations, rewards systematic diagnosis
 - **Principal**: High standards, penalizes inefficiency, rewards elegant fixes
 
+---
+
 ## How It Works
 
 ```
@@ -53,7 +94,7 @@ The LLM judge uses **three expert personas** (Junior, Senior, Principal) with pr
 │                                                                    │
 │  ┌──────────┐    ┌───────────┐    ┌──────────┐    ┌────────────┐  │
 │  │Adversarial│───►│  Real GKE  │───►│  Agent   │───►│ LLM Judge  │  │
-│  │ Designer  │    │  Cluster   │    │(Qwen 0.6B│    │(Claude/    │  │
+│  │ Designer  │    │  Cluster   │    │(Qwen 1.7B│    │(Claude/    │  │
 │  │(Claude)   │    │            │    │  + LoRA)  │    │ Qwen 14B)  │  │
 │  └─────▲─────┘    └────────────┘    └────┬─────┘    └─────┬──────┘  │
 │        │                                 │                │         │
@@ -70,7 +111,7 @@ The LLM judge uses **three expert personas** (Junior, Senior, Principal) with pr
 
 1. **Adversarial Designer** (Claude) creates targeted incidents based on the agent's weak spots — single faults for warmup, multi-fault cascading failures for harder tiers
 2. **Fault Injection** executes real `kubectl` commands against a live GKE cluster (set memory to 4Mi, inject bad images, corrupt env vars, scale to zero)
-3. **Agent** (Qwen3-0.6B + LoRA) receives a PagerDuty-style alert and must diagnose + fix using only kubectl commands — no hints about cluster topology
+3. **Agent** (Qwen3-1.7B + LoRA) receives a PagerDuty-style alert and must diagnose + fix using only kubectl commands — no hints about cluster topology
 4. **LLM Judge** scores each action for SRE workflow correctness (triage → investigate → fix → verify) and verifies resolution by checking actual cluster state
 5. **Curriculum Controller** tracks per-fault-type mastery and escalates difficulty — the agent gets harder scenarios as it improves
 6. **GRPO** computes advantages across 8 parallel rollouts and updates the policy — the agent gets better at fixing incidents it previously failed
@@ -81,6 +122,9 @@ The LLM judge uses **three expert personas** (Junior, Senior, Principal) with pr
 - **Self-generating scenarios** — the adversarial designer creates new incident types targeting the agent's weaknesses, so the training distribution adapts as the agent learns
 - **Multi-layer verification** — programmatic health checks (expected pod count, restart tracking, OOM detection) + LLM judge verification prevents false resolution
 - **No hardcoded knowledge** — the agent prompt contains zero information about cluster topology, namespace names, or deployment details. It must discover everything via `kubectl get pods -A`
+- **Environment co-evolution** — training revealed bugs in our own infrastructure, making the platform better alongside the agent
+
+---
 
 ## Architecture
 
@@ -96,7 +140,7 @@ H100 GPU (80GB)                              GKE Cluster (3 namespaces)
 │  └─ LLM Judge ─────────────────────►Claude  │   web-app (nginx)       │
 │                                  │          │   frontend-cache        │
 │  GRPO Trainer (TRL 0.29.0)       │          │                         │
-│  ├─ Qwen3-0.6B + LoRA (BF16)    │          │ auth/                   │
+│  ├─ Qwen3-1.7B + LoRA (BF16)    │          │ auth/                   │
 │  ├─ vLLM colocate (inference)    │          │   auth-service          │
 │  └─ 8 rollouts × grad_accum=8   │          └─────────────────────────┘
 │                                  │
@@ -106,7 +150,7 @@ H100 GPU (80GB)                              GKE Cluster (3 namespaces)
 ## Failure Types
 
 | Type | What Gets Injected | What Agent Must Do |
-|------|--------------------|--------------------|
+|------|--------------------|---------------------|
 | `oom_kill` | Memory limit set to 4Mi | Increase to 128Mi via `kubectl set resources` |
 | `crashloop` | Container command set to `exit 1` | Remove bad command via `kubectl patch` |
 | `image_pull` | Image set to `nginx:nonexistent-tag-99999` | Fix image tag via `kubectl set image` |
@@ -119,14 +163,41 @@ H100 GPU (80GB)                              GKE Cluster (3 namespaces)
 
 The reward function has multiple layers to ensure clean GRPO signal:
 
-- **Per-step LLM judge score** (-1.0 to +1.0) — evaluates SRE workflow quality
-- **Error penalty** — commands returning "Error: Not Found" capped at -0.2
-- **Repeat penalty** — -0.15 per repeated command
-- **Resolution bonus** — +1.0 to +5.0 for confirmed fixes (efficiency-scaled)
+- **Per-step LLM judge score** (-1.0 to +1.0) — evaluates SRE workflow quality (phase-aware: triage, investigate, fix, verify)
+- **Repeat penalty** — -0.15 per repeated command (teaches exploration over repetition)
+- **Resolution bonus** — +1.0 to +5.0 for confirmed fixes (efficiency-scaled: faster fixes get higher bonuses)
 - **Timeout penalty** — failed episodes wiped to net -2.0 total reward
 - **Judge verification** — LLM confirms fix is real by reviewing cluster state + action history
+- **Phase-order bonus** — +0.2 for following correct SRE workflow, -0.3 for skipping phases
 
 This produces clear separation: successful episodes score +3 to +8, failed episodes score -2.0. GRPO needs this variance to compute meaningful advantages.
+
+---
+
+## Results
+
+Training Qwen3-1.7B with GRPO on H100:
+
+| Metric | Episodes 1-3 | Episodes 4-8 |
+|--------|-------------|--------------|
+| Reward | -2.0 (all failures) | +3.95 to +8.15 |
+| Resolution | 0% | ~50% |
+| Key breakthrough | Doesn't know namespaces | Learns `kubectl get pods -A` → diagnose → fix |
+
+**What the agent learned (from reward signal alone):**
+1. Run `kubectl get pods -A` to discover cluster topology
+2. Identify fault types from pod STATUS column (OOMKilled, ImagePullBackOff, CrashLoopBackOff)
+3. Map fault types to correct fix commands (`set resources`, `set image`, `patch`, `scale`)
+4. Use the correct namespace (not the deployment name as namespace)
+5. Verify fixes by re-checking pod status
+
+**What we learned (from the agent's failures):**
+1. Our command parser was too strict — valid kubectl syntax was being rejected
+2. Judge snapshot truncation hid pods alphabetically after `payment-*`
+3. Race conditions between health checks and judge verification caused false negatives
+4. The environment needs to evolve alongside the agent — static environments miss bugs
+
+---
 
 ## Training with HF TRL (Colab)
 
@@ -267,11 +338,4 @@ kube-sre-gym/
 
 5. **GRPO over PPO** — GRPO compares multiple rollouts of the same prompt, producing stable advantages without a value function. Better suited for sparse, delayed rewards (most reward comes at episode end).
 
-## Results
-
-Training Qwen3-0.6B with GRPO on H100:
-- Episodes 1-3: All failures (-2.0 reward) — model doesn't know namespace layout
-- Episodes 4-8: First successes (+3.9 to +8.1 reward) — model learns `kubectl get pods -A` and correct fix commands
-- Mean reward trends from -2.0 to +1.5 within first gradient step
-
-The agent learns to: discover namespaces, identify fault types from pod status, apply correct fixes, and verify resolution — all from reward signal alone.
+6. **Environment co-evolution** — We intentionally treat environment bugs as part of the story. When training exposed issues in our command parser, judge, and health checks, we fixed them — making the environment better alongside the agent. This is recursive self-improvement at the platform level.
