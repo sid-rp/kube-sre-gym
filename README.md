@@ -17,6 +17,34 @@ tags:
 
 An RL agent learns to diagnose and fix production Kubernetes failures — OOMKills, CrashLoopBackOffs, bad images, misconfigured env vars — by operating on a **real GKE cluster**, not a simulator. An LLM judge scores each action, a curriculum controller escalates difficulty, and an adversarial designer creates novel multi-fault incidents. The agent improves through Group Relative Policy Optimization (GRPO).
 
+> **OpenEnv Hackathon Submission** | Built with [OpenEnv v0.2.1](https://github.com/meta-pytorch/OpenEnv/tree/v0.2.1) | Deployed on [HF Spaces](https://huggingface.co/spaces/openenv-community/kube-sre-gym) | Training via [HF TRL](https://github.com/huggingface/trl) in [Colab](kube_sre_gym_colab.ipynb)
+
+## Problem Statements Addressed
+
+### Primary: Statement 4 — Self-Improvement
+
+Kube SRE Gym is an environment where the agent **generates its own challenges, escalates difficulty, and improves through adaptive curricula** — exactly the recursive skill amplification described in Statement 4.
+
+- **Adversarial self-play**: Claude designs incidents that target the agent's tracked weaknesses
+- **Automatic curriculum**: Difficulty escalates as per-fault-type mastery improves (warmup → beginner → intermediate → advanced → expert)
+- **No manual authoring**: The training distribution adapts as the agent learns — infinite novel scenarios
+
+### Secondary: Statement 3.1 — World Modeling / Professional Tasks
+
+The agent interacts with **real Kubernetes tools and APIs** — not mocked responses or shortcuts. It must maintain internal state across multi-step kubectl workflows and reason about causal effects of its actions on a live cluster.
+
+- **Real tool interaction**: Every `kubectl` command executes against a live GKE cluster
+- **Multi-step workflows**: Triage → investigate → fix → verify, with no shortcuts
+- **Persistent world state**: Pod restarts, OOM events, and cascading failures are real K8s events
+
+### Partner Sub-Theme: Snorkel AI — Simulated Experts-in-the-Loop
+
+The LLM judge uses **three expert personas** (Junior, Senior, Principal) with progressively stricter evaluation criteria, simulating interaction with subject-matter experts whose requirements change as the agent improves:
+
+- **Junior**: Lenient scoring, partial credit, provides hints
+- **Senior**: Standard SRE expectations, rewards systematic diagnosis
+- **Principal**: High standards, penalizes inefficiency, rewards elegant fixes
+
 ## How It Works
 
 ```
@@ -100,6 +128,17 @@ The reward function has multiple layers to ensure clean GRPO signal:
 
 This produces clear separation: successful episodes score +3 to +8, failed episodes score -2.0. GRPO needs this variance to compute meaningful advantages.
 
+## Training with HF TRL (Colab)
+
+A complete training notebook is provided at [`kube_sre_gym_colab.ipynb`](kube_sre_gym_colab.ipynb) using **HF TRL's GRPO** implementation. The notebook covers:
+
+1. Connect to the OpenEnv server on HF Spaces
+2. Configure GRPO training with TRL (`GRPOConfig`, `GRPOTrainer`)
+3. Run training episodes against the live environment
+4. Save checkpoints to HuggingFace Hub
+
+Training uses TRL's experimental OpenEnv integration (`trl.experimental.openenv.generate_rollout_completions`) for seamless environment-trainer communication.
+
 ## Quick Start
 
 ```python
@@ -113,6 +152,27 @@ with KubeSreGymEnv(base_url="http://localhost:8000") as client:
     obs = client.step(KubeSreGymAction(command="kubectl describe pod payment-api-xxx -n payments"))
     obs = client.step(KubeSreGymAction(command="fix: kubectl set resources deployment/payment-api --limits=memory=128Mi -n payments"))
     # reward > 0 if fix is correct, episode done
+```
+
+## Deployment on HF Spaces
+
+The environment is deployed as a Docker-based HF Space using OpenEnv v0.2.1:
+
+```bash
+# Dockerfile uses openenv-base image
+FROM ghcr.io/meta-pytorch/openenv-base:latest
+# Serves OpenEnv HTTP/WebSocket API on port 8000
+CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Configuration in `openenv.yaml`:
+```yaml
+spec_version: 1
+name: kube_sre_gym
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
 ```
 
 ## Training on H100
@@ -172,8 +232,12 @@ Runs both models through random adversarial scenarios and reports resolution rat
 kube-sre-gym/
 ├── train.py                # GRPO training (TRL 0.29.0 + vLLM colocate)
 ├── eval.py                 # Base vs trained model comparison
+├── kube_sre_gym_colab.ipynb # Google Colab training notebook (HF TRL)
+├── plot_rewards.py          # Reward curve visualization
 ├── models.py               # Action, Observation, State dataclasses
 ├── client.py               # KubeSreGymEnv sync client
+├── Dockerfile               # HF Spaces deployment (OpenEnv base image)
+├── openenv.yaml             # OpenEnv v0.2.1 Space config
 ├── server/
 │   ├── kube_sre_gym_environment.py  # Core env: reset → inject → step → judge → reward
 │   ├── k8s_backend.py      # K8s auth, execute, reset, health checks
