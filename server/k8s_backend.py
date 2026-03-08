@@ -31,16 +31,24 @@ def _load_token_auth(endpoint: str, ca_cert_b64: str, token: str):
 
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    ca_cert = base64.b64decode(ca_cert_b64)
-    ca_path = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
-    ca_path.write(ca_cert)
-    ca_path.close()
-
     configuration = client.Configuration()
-    configuration.host = endpoint
-    configuration.ssl_ca_cert = ca_path.name
-    configuration.api_key = {"BearerToken": token}
+    configuration.host = endpoint.strip()
+    configuration.api_key = {"BearerToken": token.strip()}
     configuration.api_key_prefix = {"BearerToken": "Bearer"}
+
+    # Try CA cert; fall back to insecure if it fails (HF Spaces may mangle the value)
+    ca_cert_b64 = ca_cert_b64.strip()
+    try:
+        ca_cert = base64.b64decode(ca_cert_b64)
+        ca_path = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+        ca_path.write(ca_cert)
+        ca_path.close()
+        configuration.ssl_ca_cert = ca_path.name
+        logger.info(f"K8s CA cert loaded ({len(ca_cert)} bytes)")
+    except Exception as e:
+        logger.warning(f"Failed to decode K8S_CA_CERT ({e}), falling back to insecure TLS")
+        configuration.verify_ssl = False
+
     client.Configuration.set_default(configuration)
 
 
