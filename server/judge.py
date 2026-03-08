@@ -60,13 +60,13 @@ RECENT HISTORY:
 Return JSON only: {{"score": <float -1.0 to 1.0>, "feedback": "<1-2 sentence evaluation>"}}"""
 
         try:
-            result = self.llm.chat_json(PERSONAS[persona], user_prompt, temperature=0.3)
+            result = self.llm.chat_json(PERSONAS[persona], user_prompt, temperature=0.3, max_tokens=256)
             score = max(-1.0, min(1.0, float(result.get("score", 0.0))))
             feedback = result.get("feedback", "")
             return score, feedback
         except Exception as e:
-            logger.error(f"Judge LLM error: {e}")
-            return 0.0, "Judge unavailable."
+            logger.error(f"Judge LLM error: {e}", exc_info=True)
+            return 0.0, f"Judge error: {type(e).__name__}"
 
 
 # ---- SRE phase detection (heuristic, no LLM call) ----

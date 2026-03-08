@@ -207,7 +207,7 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
                         f"faults={len(scenario.steps)}, fix_steps={len(scenario.fix_steps)})")
             return scenario
         except Exception as e:
-            logger.error(f"AdversarialDesigner error: {e} — falling back to hardcoded scenario")
+            logger.error(f"AdversarialDesigner error: {e} — falling back to hardcoded scenario", exc_info=True)
             return self._fallback_scenario(difficulty)
 
     # Commands the backend can actually execute

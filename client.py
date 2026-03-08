@@ -15,20 +15,17 @@ class KubeSreGymEnv(
     Client for the K8s SRE Gym Environment.
 
     Example:
-        >>> with KubeSreGymEnv(base_url="http://localhost:8000") as client:
+        >>> with KubeSreGymEnv(base_url="http://localhost:8000").sync() as client:
         ...     result = client.reset()
         ...     print(result.observation.command_output)
         ...     result = client.step(KubeSreGymAction(command="kubectl get pods -A"))
         ...     print(result.observation.command_output)
-
-    Example with Docker:
-        >>> client = KubeSreGymEnv.from_docker_image("kube_sre_gym-env:latest")
-        >>> try:
-        ...     result = client.reset()
-        ...     result = client.step(KubeSreGymAction(command="kubectl get pods -A"))
-        ... finally:
-        ...     client.close()
     """
+
+    def __init__(self, base_url: str, **kwargs):
+        # K8s operations + LLM calls can be slow (especially adversarial reset)
+        kwargs.setdefault("message_timeout_s", 300.0)
+        super().__init__(base_url=base_url, **kwargs)
 
     def _step_payload(self, action: KubeSreGymAction) -> Dict:
         return {"command": action.command}
