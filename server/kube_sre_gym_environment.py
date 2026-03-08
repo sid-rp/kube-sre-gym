@@ -267,10 +267,16 @@ class KubeSreGymEnvironment(Environment):
             # Only check the affected namespace — other namespaces may have stale pods
             STARTING_STATES = ("ContainerCreating", "PodInitializing")
             affected_ns = self.scenario.namespace if self.scenario else None
+            # Adversarial scenarios inject faults across multiple namespaces —
+            # must check ALL namespaces, not just the primary one
+            is_adversarial = (self.scenario and self.scenario.failure_type == "adversarial")
             for poll in range(12):
                 time.sleep(5)
                 health = self.backend.check_health()
-                if affected_ns and affected_ns in health:
+                if is_adversarial:
+                    # Check all app namespaces for multi-fault scenarios
+                    check_health = health
+                elif affected_ns and affected_ns in health:
                     check_health = {affected_ns: health[affected_ns]}
                 else:
                     check_health = health
