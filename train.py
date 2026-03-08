@@ -3,22 +3,19 @@ GRPO Training Script — K8s SRE Agent
 Follows the standard OpenEnv + TRL pattern (same as wordle.py example).
 
 Everything runs on the H100:
-  1. vLLM serves the judge model (Qwen3-14B) on port 8001
-  2. OpenEnv server runs locally on port 8000 (talks to GKE + judge)
-  3. This script trains the agent (Qwen3-8B) via GRPO with TRL's built-in vLLM
+  - vLLM (colocate mode) handles agent inference during GRPO — no separate process
+  - OpenEnv server runs on port 8000 (talks to GKE + external judge)
+  - External judge (Claude via Anthropic API) scores actions — no GPU needed
 
-Setup (3 terminals on H100):
+Setup (2 terminals on H100):
 
   # Install
   pip install -e ".[train]"
 
-  # Terminal 1: Judge model
-  trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001
+  # Terminal 1: OpenEnv server (adversarial mode with Claude judge)
+  GYM_MODE=adversarial LLM_BACKEND=anthropic ANTHROPIC_API_KEY=sk-ant-... uv run server
 
-  # Terminal 2: OpenEnv server
-  LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 uv run server
-
-  # Terminal 3: GRPO training
+  # Terminal 2: GRPO training (full 80GB for agent)
   python train.py --vllm-mode colocate
 """
 
@@ -26,8 +23,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
+
+# Silence TRL experimental warning for rollout_func
+os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
 
 from datasets import Dataset
 from transformers import AutoTokenizer
@@ -287,7 +288,6 @@ def main() -> None:
         per_device_train_batch_size=1,
         num_generations=args.num_generations,
         max_completion_length=args.max_new_tokens,
-        max_prompt_length=2048,
         logging_steps=args.logging_steps,
         save_strategy="steps",
         save_steps=args.save_steps,

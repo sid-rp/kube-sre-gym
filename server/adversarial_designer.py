@@ -213,17 +213,54 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
     # Commands the backend can actually execute
     _VALID_PREFIXES = ("kubectl set ", "kubectl patch ", "kubectl scale ", "kubectl delete ", "kubectl rollout ")
 
+    # Known deployments per namespace (must match sample_app manifests)
+    _KNOWN_DEPLOYMENTS = {
+        ns: set(deploys.keys()) for ns, deploys in HEALTHY_STATE.items()
+    }
+
+    def _validate_command_targets(self, command: str) -> str | None:
+        """Check that a kubectl command targets a real deployment/namespace.
+
+        Returns an error string if invalid, None if OK.
+        """
+        parts = command.split()
+        # Extract namespace
+        ns = None
+        for i, p in enumerate(parts):
+            if p == "-n" and i + 1 < len(parts):
+                ns = parts[i + 1]
+        if ns and ns not in self._KNOWN_DEPLOYMENTS:
+            return f"unknown namespace '{ns}' (valid: {list(self._KNOWN_DEPLOYMENTS.keys())})"
+
+        # Extract deployment name
+        for p in parts:
+            if p.startswith("deployment/"):
+                deploy_name = p.split("/")[-1]
+                if ns and deploy_name not in self._KNOWN_DEPLOYMENTS.get(ns, set()):
+                    return (f"deployment '{deploy_name}' not found in namespace '{ns}' "
+                            f"(valid: {list(self._KNOWN_DEPLOYMENTS.get(ns, set()))})")
+        return None
+
     def inject(self, scenario: AdversarialScenarioSpec) -> str:
         """Execute the incident injection commands on the real cluster.
 
         Validates each command before execution to prevent unsupported
-        operations (e.g. kubectl apply -f which the backend doesn't support).
+        operations or commands targeting non-existent resources.
         """
         results = []
+        success_count = 0
         for i, step in enumerate(scenario.steps):
             # Validate command is something the backend can execute
             if not any(step.action.startswith(p) for p in self._VALID_PREFIXES):
                 msg = f"Step {i+1}: SKIPPED — unsupported command: {step.action}"
+                results.append(msg)
+                logger.warning(msg)
+                continue
+
+            # Validate command targets real resources
+            target_err = self._validate_command_targets(step.action)
+            if target_err:
+                msg = f"Step {i+1}: SKIPPED — {target_err}"
                 results.append(msg)
                 logger.warning(msg)
                 continue
@@ -234,15 +271,22 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
                     results.append(f"Step {i+1}: FAILED -> {result}")
                     logger.error(f"Injection failed step {i+1}: {result}")
                 else:
+                    success_count += 1
                     results.append(f"Step {i+1}: {step.effect} -> {result}")
                     logger.info(f"Injected step {i+1}/{len(scenario.steps)}: {step.action}")
             except Exception as e:
                 results.append(f"Step {i+1}: FAILED -> {e}")
                 logger.error(f"Injection failed step {i+1}: {e}")
 
+        # If no steps succeeded, the scenario is broken
+        if success_count == 0:
+            logger.error("All injection steps failed — no faults injected")
+
         # Let failures propagate through the cluster
         wait_time = min(15, 5 + len(scenario.steps) * 3)
         time.sleep(wait_time)
+
+        scenario._inject_success_count = success_count
         return "\n".join(results)
 
     def _parse_scenario(self, data: dict, difficulty: float) -> AdversarialScenarioSpec:

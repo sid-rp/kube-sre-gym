@@ -79,6 +79,11 @@ class KubeSreGymEnvironment(Environment):
         if self.mode == "adversarial":
             self.scenario = self.designer.design(skill_profile, difficulty)
             self.designer.inject(self.scenario)
+            # If all injection steps failed, fall back to hardcoded scenario
+            if getattr(self.scenario, '_inject_success_count', 0) == 0:
+                logger.warning("LLM scenario injection failed — using fallback scenario")
+                self.scenario = self.designer._fallback_scenario(difficulty)
+                self.designer.inject(self.scenario)
         else:
             self.scenario = self.generator.generate(skill_profile, difficulty)
             self.backend.inject_failure(self.scenario.failure_type, self.scenario.params)
