@@ -248,15 +248,25 @@ class AdversarialDesigner:
         self.max_steps = max_steps
 
     def design(self, skill_profile: dict, difficulty: float) -> AdversarialScenarioSpec:
-        """Design an LLM-generated compound incident.
+        """Design an incident with difficulty-based mix of single and multi-fault.
 
-        Adversarial mode only activates at difficulty >= 0.6 (after agent has
-        mastered simple faults in standard mode). Always uses LLM to design
-        multi-fault scenarios that are harder than the standard pool.
+        For GRPO training, we need reward VARIANCE — some episodes the agent
+        can solve (single-fault warmup) and some it struggles with (multi-fault LLM).
+        Mix ratio shifts toward harder scenarios as difficulty increases.
 
-        Uses progressive context enrichment (ChaosEater pattern):
-        topology + healthy baseline + current health → scenario design.
+        - difficulty < 0.4: 70% warmup (1-fault), 30% LLM (2-fault)
+        - difficulty 0.4-0.7: 40% warmup, 60% LLM
+        - difficulty > 0.7: 10% warmup, 90% LLM
         """
+        if difficulty < 0.4:
+            use_warmup = random.random() < 0.7
+        elif difficulty < 0.7:
+            use_warmup = random.random() < 0.4
+        else:
+            use_warmup = random.random() < 0.1
+
+        if use_warmup:
+            return self._design_warmup(skill_profile, difficulty)
         return self._design_llm(skill_profile, difficulty)
 
     def _design_warmup(self, skill_profile: dict, difficulty: float) -> AdversarialScenarioSpec:
