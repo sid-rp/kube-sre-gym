@@ -1,25 +1,23 @@
 from dataclasses import dataclass, field
-from openenv.core.env_server import Action, Observation, State
+from pydantic import Field as PydanticField
+from openenv.core.env_server.types import Action, Observation, State
 
 
-@dataclass
 class K8sSREAction(Action):
     """Agent's action — a kubectl command or diagnosis/fix statement."""
-    command: str
+    command: str = PydanticField(..., min_length=1, description="kubectl command or diagnose:/fix: statement")
 
 
-@dataclass
 class K8sSREObservation(Observation):
     """What the agent sees after each action."""
-    command_output: str
-    cluster_status_summary: str
-    active_alerts: list[str] = field(default_factory=list)
-    steps_taken: int = 0
-    max_steps: int = 15
-    hint: str = ""
+    command_output: str = PydanticField(default="", description="Output from the last command")
+    cluster_status_summary: str = PydanticField(default="", description="Current cluster pod status")
+    active_alerts: list[str] = PydanticField(default_factory=list, description="Active PagerDuty alerts")
+    steps_taken: int = PydanticField(default=0, ge=0, description="Steps taken this episode")
+    max_steps: int = PydanticField(default=15, description="Max steps per episode")
+    hint: str = PydanticField(default="", description="Hint for junior persona")
 
 
-@dataclass
 class K8sSREState(State):
     """Episode metadata."""
     incident_id: str = ""
@@ -30,18 +28,18 @@ class K8sSREState(State):
     is_resolved: bool = False
     cumulative_reward: float = 0.0
     judge_persona: str = "junior"
-    curriculum_stats: dict = field(default_factory=dict)
+    curriculum_stats: dict = {}
 
 
 @dataclass
 class ScenarioSpec:
     """A dynamically generated failure scenario."""
-    failure_type: str           # injectable primitive
+    failure_type: str
     namespace: str
     deployment: str
-    params: dict                # passed to backend.inject_failure
+    params: dict
     root_cause: str
-    difficulty: float           # 0.0-1.0
+    difficulty: float
     alert_message: str
     correct_fix_description: str
     expected_diagnostic_path: list[str] = field(default_factory=list)

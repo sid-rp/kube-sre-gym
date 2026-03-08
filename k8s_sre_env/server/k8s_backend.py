@@ -57,21 +57,26 @@ class K8sBackend:
     """
 
     def __init__(self):
+        self.connected = False
         token = os.environ.get("K8S_TOKEN")
         endpoint = os.environ.get("K8S_ENDPOINT")       # https://34.169.10.97
         ca_cert = os.environ.get("K8S_CA_CERT")          # base64 CA cert
 
-        if token and endpoint and ca_cert:
-            _load_token_auth(endpoint, ca_cert, token)
-            logger.info("Using bearer token auth")
-        else:
-            try:
-                config.load_incluster_config()
-                logger.info("Loaded in-cluster config")
-            except config.ConfigException:
-                kubeconfig_path = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
-                config.load_kube_config(config_file=kubeconfig_path)
-                logger.info(f"Loaded kubeconfig from {kubeconfig_path}")
+        try:
+            if token and endpoint and ca_cert:
+                _load_token_auth(endpoint, ca_cert, token)
+                logger.info("Using bearer token auth")
+            else:
+                try:
+                    config.load_incluster_config()
+                    logger.info("Loaded in-cluster config")
+                except config.ConfigException:
+                    kubeconfig_path = os.environ.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+                    config.load_kube_config(config_file=kubeconfig_path)
+                    logger.info(f"Loaded kubeconfig from {kubeconfig_path}")
+            self.connected = True
+        except Exception as e:
+            logger.warning(f"K8s auth failed (will retry on first use): {e}")
 
         self.v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
