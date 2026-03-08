@@ -248,19 +248,15 @@ class AdversarialDesigner:
         self.max_steps = max_steps
 
     def design(self, skill_profile: dict, difficulty: float) -> AdversarialScenarioSpec:
-        """Design an incident appropriate for the agent's current skill level.
+        """Design an LLM-generated compound incident.
 
-        - difficulty < 0.4: pick from WARMUP_SCENARIOS (no LLM call, fast, predictable)
-        - difficulty >= 0.4: use LLM to design progressively harder incidents
+        Adversarial mode only activates at difficulty >= 0.6 (after agent has
+        mastered simple faults in standard mode). Always uses LLM to design
+        multi-fault scenarios that are harder than the standard pool.
 
         Uses progressive context enrichment (ChaosEater pattern):
         topology + healthy baseline + current health → scenario design.
         """
-        # Low difficulty → use simple hardcoded scenarios (warmup + beginner tiers)
-        # Only start using LLM-designed incidents at intermediate tier and above
-        if difficulty <= 0.4:
-            return self._design_warmup(skill_profile, difficulty)
-
         return self._design_llm(skill_profile, difficulty)
 
     def _design_warmup(self, skill_profile: dict, difficulty: float) -> AdversarialScenarioSpec:
