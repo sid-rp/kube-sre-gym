@@ -91,6 +91,24 @@ class KubeSreGymEnvironment(Environment):
             raise
 
     def _do_reset(self) -> KubeSreGymObservation:
+        # If there's an active episode that wasn't marked done, log it as abandoned
+        if self._step_count > 0 and self.scenario and self.history:
+            track_type = self.scenario.failure_type
+            if hasattr(self.scenario, "name") and self.scenario.name:
+                track_type = f"adversarial:{self.scenario.name}"
+            raw_sum = sum(h["reward"] for h in self.history)
+            total_reward = raw_sum / self._step_count if self._step_count > 0 else 0.0
+            self.curriculum.record(
+                failure_type=track_type,
+                success=False,
+                steps=self._step_count,
+                reward=total_reward,
+            )
+            logger.info(f"  === EPISODE DONE: ABANDONED | fault={track_type} | "
+                        f"steps={self._step_count} | total_reward={total_reward:.2f} | "
+                        f"tier={self.curriculum.get_tier_name()} | "
+                        f"difficulty={self.curriculum.get_difficulty():.2f} ===")
+
         # Step 1: Deploy clean healthy cluster (base manifests only)
         self.backend.reset()
         logger.info("Cluster reset complete")
