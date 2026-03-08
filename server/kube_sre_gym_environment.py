@@ -345,15 +345,25 @@ class KubeSreGymEnvironment(Environment):
                     break
 
             if all_healthy:
-                done = True
-                # Efficiency bonus scaled by difficulty:
-                # - Easy (0.15): max 3.0, rewards fast solves
-                # - Hard (0.80): max 5.0, rewards solving at all
-                difficulty = self.curriculum.get_difficulty()
-                base_bonus = 1.0 + difficulty * 2.0  # 1.0 at easy, 3.0 at hard
-                efficiency = base_bonus + 2.0 * (1.0 - self._step_count / self.max_steps)
-                reward += efficiency
-                feedback = f"Incident resolved! All pods healthy. (bonus: +{efficiency:.1f})"
+                # Programmatic check passed — now ask the judge to verify
+                # by looking at action history + current cluster state.
+                # This catches cases where pods appear healthy but the actual
+                # fix was wrong (e.g., OOM flapping, wrong namespace).
+                cluster_snapshot = self.backend.execute("kubectl get pods --all-namespaces")
+                judge_resolved, judge_reason = self.judge.verify_resolution(
+                    self.scenario, self.history + [{"step": self._step_count,
+                     "command": action.command, "output": output[:200]}],
+                    cluster_snapshot,
+                )
+                if judge_resolved:
+                    done = True
+                    difficulty = self.curriculum.get_difficulty()
+                    base_bonus = 1.0 + difficulty * 2.0
+                    efficiency = base_bonus + 2.0 * (1.0 - self._step_count / self.max_steps)
+                    reward += efficiency
+                    feedback = f"Incident resolved! All pods healthy. (bonus: +{efficiency:.1f})"
+                else:
+                    feedback += f" Pods appear healthy but fix not confirmed: {judge_reason}"
             else:
                 # Partial progress feedback — tell agent how many pods are healthy
                 feedback += f" Fix applied. {healthy_count}/{expected_pods} expected pods healthy."

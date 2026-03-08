@@ -28,6 +28,68 @@ class LLMJudge:
     def __init__(self, llm: LLMClient):
         self.llm = llm
 
+    def verify_resolution(
+        self,
+        scenario: ScenarioSpec,
+        history: list,
+        cluster_snapshot: str,
+    ) -> tuple[bool, str]:
+        """Ask the judge to verify if the incident is actually resolved.
+
+        Runs after the programmatic health check passes. The judge looks at
+        the full cluster state and action history to decide if ALL faults
+        from the scenario were actually fixed.
+        """
+        history_summary = "\n".join(
+            f"  Step {h['step']}: {h['command']} -> {h.get('output', '')[:100]}"
+            for h in history
+        )
+
+        fix_desc = scenario.correct_fix_description
+        # For adversarial scenarios, include fix_steps if available
+        fix_steps = ""
+        if hasattr(scenario, "fix_steps") and scenario.fix_steps:
+            fix_steps = "\n".join(f"  - {s}" for s in scenario.fix_steps)
+
+        user_prompt = f"""You are verifying whether a Kubernetes incident was ACTUALLY resolved.
+
+INCIDENT:
+- Alert: {scenario.alert_message}
+- Root cause: {scenario.root_cause}
+- Required fix: {fix_desc}
+{f'- Expected fix commands:{chr(10)}{fix_steps}' if fix_steps else ''}
+
+AGENT'S ACTIONS:
+{history_summary}
+
+CURRENT CLUSTER STATE (kubectl get pods -A):
+{cluster_snapshot[:2000]}
+
+QUESTION: Did the agent actually fix ALL the issues described above?
+Look for:
+- Are the specific broken deployments/pods now Running with correct images/config?
+- Did the agent use the RIGHT namespace (not just any namespace)?
+- If there were multiple faults, were ALL of them addressed?
+- Is the fix command output showing success (not "Error: Not Found")?
+
+Return JSON only: {{"resolved": true/false, "reason": "<1-2 sentence explanation>"}}"""
+
+        try:
+            result = self.llm.chat_json(
+                "You are a strict Kubernetes incident verification system. Only confirm resolution if ALL faults were genuinely fixed.",
+                user_prompt,
+                temperature=0.1,
+                max_tokens=256,
+            )
+            resolved = bool(result.get("resolved", False))
+            reason = result.get("reason", "")
+            logger.info(f"    Judge verification: resolved={resolved} | {reason}")
+            return resolved, reason
+        except Exception as e:
+            logger.error(f"Judge verify error: {e}", exc_info=True)
+            # On error, fall back to programmatic check (assume resolved)
+            return True, f"Verification error: {type(e).__name__}, defaulting to resolved"
+
     def evaluate(
         self,
         command: str,
