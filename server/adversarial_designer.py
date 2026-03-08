@@ -306,13 +306,9 @@ class AdversarialDesigner:
         """Use the LLM to design a harder incident based on agent's skill gaps."""
         # Budget: reserve ~7 steps for triage+investigation+verify, leave rest for fixes
         max_fix_steps = max(1, min(6, self.max_steps - 7))
-        # Scale mutations with difficulty tier:
-        #   intermediate (0.4-0.6): 1 fault
-        #   advanced     (0.6-0.8): 2 faults
-        #   expert       (0.8+):    3 faults
-        if difficulty < 0.6:
-            max_mutations = 1
-        elif difficulty < 0.8:
+        # Always inject at least 2 faults in adversarial mode — single faults
+        # are too easy and don't provide enough GRPO reward variance.
+        if difficulty < 0.8:
             max_mutations = 2
         else:
             max_mutations = 3
