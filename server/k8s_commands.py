@@ -57,7 +57,7 @@ class CommandHandler:
         if self._GET_RESOURCES is None:
             self._GET_RESOURCES = {
                 "pods": self._get_pods, "pod": self._get_pods, "po": self._get_pods,
-                "deployments": self._get_deployments, "deploy": self._get_deployments,
+                "deployments": self._get_deployments, "deployment": self._get_deployments, "deploy": self._get_deployments,
                 "events": self._get_events, "ev": self._get_events,
                 "nodes": self._get_nodes, "node": self._get_nodes,
                 "services": self._get_services, "svc": self._get_services,
@@ -541,28 +541,30 @@ class CommandHandler:
             return "error: resource type and name required"
         rtype, rname = parts[1], parts[2]
 
-        # Extract JSON patch body using brace-depth counting
+        # Extract JSON patch body — find first '{' and match braces
+        # Strip all single quotes first (shell quoting artifacts)
+        cleaned_cmd = raw_cmd.replace("'", "")
+        brace_start = cleaned_cmd.find("{")
+        if brace_start < 0:
+            # Also try finding JSON after -p flag
+            return "error: patch body required (-p '{...}')"
+
         patch_str = None
-        flag_match = re.search(r'(?:-p|--patch)[= ]+[\'"]?', raw_cmd)
-        if flag_match:
-            remainder = raw_cmd[flag_match.end():].strip().strip("'\"")
-            brace_start = remainder.find("{")
-            if brace_start >= 0:
-                depth = 0
-                for j, ch in enumerate(remainder[brace_start:], brace_start):
-                    if ch == "{":
-                        depth += 1
-                    elif ch == "}":
-                        depth -= 1
-                        if depth == 0:
-                            patch_str = remainder[brace_start:j + 1]
-                            break
+        depth = 0
+        for j, ch in enumerate(cleaned_cmd[brace_start:], brace_start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    patch_str = cleaned_cmd[brace_start:j + 1]
+                    break
 
         if not patch_str:
             return "error: patch body required (-p '{...}')"
         try:
             body = json.loads(patch_str)
-            if rtype in ("deployment", "deploy"):
+            if rtype in ("deployment", "deploy", "deployments"):
                 self.apps_v1.patch_namespaced_deployment(rname, namespace, body)
                 return f"deployment.apps/{rname} patched"
         except ValueError as e:

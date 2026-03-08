@@ -55,13 +55,30 @@ IMPORTANT RULES:
 - Always specify namespace with -n <namespace> (pods are in: payments, frontend, auth, hackathon)
 - Start with: kubectl get pods -n <namespace> to see actual pod names and status
 - Never guess pod names — always list pods first, then use exact names from the output
-- Use kubectl describe pod <name> -n <namespace> and kubectl logs <name> -n <namespace> to investigate
+
+AVAILABLE COMMANDS:
+- kubectl get pods/deployments/events/services/nodes -n <ns>
+- kubectl describe pod/deployment <name> -n <ns>
+- kubectl logs <pod-name> -n <ns>
+- kubectl set image deployment/<name> <container>=<image> -n <ns>
+- kubectl set resources deployment/<name> --limits=memory=<val> -n <ns>
+- kubectl set env deployment/<name> KEY=VALUE -n <ns>
+- kubectl patch deployment <name> -n <ns> -p '{"spec":...}'
+- kubectl rollout restart deployment/<name> -n <ns>
+- kubectl scale deployment/<name> --replicas=N -n <ns>
+- kubectl delete pod <name> -n <ns>
+
+COMMON FIXES:
+- CrashLoopBackOff (bad command): kubectl patch deployment <name> -n <ns> -p '{"spec":{"template":{"spec":{"containers":[{"name":"<container>","command":null,"args":null}]}}}}'
+- OOMKilled: kubectl set resources deployment/<name> -c <container> --limits=memory=256Mi -n <ns>
+- ImagePullBackOff: kubectl set image deployment/<name> <container>=<correct-image> -n <ns>
+- Bad env config: kubectl set env deployment/<name> KEY=CORRECT_VALUE -n <ns>
 
 After diagnosis, submit:
 - diagnose: <your root cause analysis>
 - fix: kubectl <the exact fix command>
 
-Be systematic: list pods → check status → describe/logs → diagnose → fix.
+Be systematic: list pods → describe/logs → diagnose → fix.
 Be efficient: minimize unnecessary commands.
 Output one command per line. No explanations, just commands."""
 
