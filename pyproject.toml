@@ -3,13 +3,13 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openenv-kube_sre_env"
+name = "openenv-kube_sre_gym"
 version = "0.1.0"
 description = "K8s SRE Self-Improving RL Environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
     # Core OpenEnv runtime
-    "openenv-core[core]>=0.2.0",
+    "openenv-core[core] @ git+https://github.com/meta-pytorch/OpenEnv.git@v0.2.1",
     # K8s / GKE
     "kubernetes>=28.0.0",
     "google-auth>=2.0.0",
@@ -27,9 +27,9 @@ dev = [
 ]
 
 [project.scripts]
-server = "kube_sre_env.server.app:main"
+server = "kube_sre_gym.server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["kube_sre_env", "kube_sre_env.server"]
-package-dir = { "kube_sre_env" = ".", "kube_sre_env.server" = "server" }
+packages = ["kube_sre_gym", "kube_sre_gym.server"]
+package-dir = { "kube_sre_gym" = ".", "kube_sre_gym.server" = "server" }

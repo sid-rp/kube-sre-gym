@@ -4,8 +4,6 @@ Unified LLM client for the environment.
 Two backends:
   - HF Inference API (default) — free, serverless, no infra needed
   - OpenAI-compatible (vLLM/local) — for self-hosted models
-
-The environment doesn't care which backend is used.
 """
 
 import os
@@ -61,7 +59,6 @@ class LLMClient:
     def chat_json(self, system: str, user: str, temperature: float = 0.3) -> dict:
         """Send a chat request and parse the response as JSON."""
         raw = self.chat(system, user, temperature)
-        # Strip markdown code fences if present
         raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]

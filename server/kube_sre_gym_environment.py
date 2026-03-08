@@ -1,5 +1,5 @@
 """
-K8s SRE Environment Implementation.
+Kube SRE Gym Environment Implementation.
 
 Agent diagnoses and fixes real GKE incidents with curriculum-driven difficulty.
 """
@@ -10,7 +10,11 @@ from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
 
-from models import K8sSREAction, K8sSREObservation, K8sSREState, ScenarioSpec
+try:
+    from ..models import KubeSreGymAction, KubeSreGymObservation, KubeSreGymState
+except ImportError:
+    from models import KubeSreGymAction, KubeSreGymObservation, KubeSreGymState
+
 from .llm_client import LLMClient
 from .k8s_backend import K8sBackend
 from .scenario_generator import ScenarioGenerator
@@ -20,7 +24,7 @@ from .judge import LLMJudge
 logger = logging.getLogger(__name__)
 
 
-class KubeSreEnvironment(Environment):
+class KubeSreGymEnvironment(Environment):
     """
     K8s SRE OpenEnv Environment — agent diagnoses and fixes real GKE incidents.
 
@@ -47,9 +51,9 @@ class KubeSreEnvironment(Environment):
         self._step_count = 0
         self.max_steps = 15
         self.history = []
-        self._state = K8sSREState(episode_id=str(uuid4()), step_count=0)
+        self._state = KubeSreGymState(episode_id=str(uuid4()), step_count=0)
 
-    def reset(self) -> K8sSREObservation:
+    def reset(self) -> KubeSreGymObservation:
         self.backend.reset()
 
         skill_profile = self.curriculum.get_skill_profile()
@@ -60,7 +64,7 @@ class KubeSreEnvironment(Environment):
 
         self._step_count = 0
         self.history = []
-        self._state = K8sSREState(
+        self._state = KubeSreGymState(
             episode_id=str(uuid4()),
             step_count=0,
             difficulty=difficulty,
@@ -74,7 +78,7 @@ class KubeSreEnvironment(Environment):
         cluster_summary = self.backend.execute("kubectl get pods --all-namespaces")
         persona = self.curriculum.get_judge_persona()
 
-        return K8sSREObservation(
+        return KubeSreGymObservation(
             command_output=(
                 f"PAGERDUTY ALERT: {self.scenario.alert_message}\n\n"
                 f"You are the on-call SRE. Investigate and resolve this incident.\n"
@@ -91,7 +95,7 @@ class KubeSreEnvironment(Environment):
             reward=0.0,
         )
 
-    def step(self, action: K8sSREAction) -> K8sSREObservation:
+    def step(self, action: KubeSreGymAction) -> KubeSreGymObservation:
         self._step_count += 1
         self._state.step_count = self._step_count
 
@@ -143,7 +147,7 @@ class KubeSreEnvironment(Environment):
 
         cluster_summary = self.backend.execute("kubectl get pods --all-namespaces")
 
-        return K8sSREObservation(
+        return KubeSreGymObservation(
             command_output=output,
             cluster_status_summary=cluster_summary,
             active_alerts=[self.scenario.alert_message] if not done else [],
@@ -155,5 +159,5 @@ class KubeSreEnvironment(Environment):
         )
 
     @property
-    def state(self) -> K8sSREState:
+    def state(self) -> KubeSreGymState:
         return self._state

@@ -8,7 +8,7 @@ class CurriculumController:
     """
 
     def __init__(self):
-        self.history = defaultdict(list)    # failure_type -> [bool, ...]
+        self.history = defaultdict(list)
         self.episode_rewards = []
         self.episode_count = 0
 
@@ -26,23 +26,15 @@ class CurriculumController:
         }
 
     def get_difficulty(self) -> float:
-        """
-        Continuous difficulty 0.0-1.0.
-        Starts easy, grows with agent success rate.
-        """
+        """Continuous difficulty 0.0-1.0. Starts easy, grows with agent success rate."""
         all_results = [r for results in self.history.values() for r in results[-10:]]
         if len(all_results) < 3:
             return 0.2
         rate = sum(all_results) / len(all_results)
-        return min(0.95, rate + 0.15)  # always slightly above current ability
+        return min(0.95, rate + 0.15)
 
     def get_judge_persona(self) -> str:
-        """
-        Evolving SRE expert strictness — Snorkel AI angle.
-        junior  → lenient, gives hints
-        senior  → standard expectations
-        principal → strict, demands diagnosis before fix
-        """
+        """junior → lenient, senior → standard, principal → strict."""
         d = self.get_difficulty()
         if d < 0.4:
             return "junior"

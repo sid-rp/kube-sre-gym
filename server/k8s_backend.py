@@ -21,7 +21,6 @@ def _load_token_auth(endpoint: str, ca_cert_b64: str, token: str):
     configuration.host = endpoint
     configuration.api_key = {"authorization": f"Bearer {token}"}
 
-    # Try CA cert first, fall back to verify_ssl=False
     try:
         ca_cert_bytes = base64.b64decode(ca_cert_b64)
         ca_cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".crt")
@@ -34,13 +33,11 @@ def _load_token_auth(endpoint: str, ca_cert_b64: str, token: str):
 
     client.Configuration.set_default(configuration)
 
-    # Test connection
     try:
         v1 = client.CoreV1Api()
         v1.list_namespace(_request_timeout=5)
         logger.info(f"Authenticated to {endpoint} via bearer token (SSL verified)")
     except Exception:
-        # CA cert might not work on this platform, retry without SSL verify
         configuration.verify_ssl = False
         configuration.ssl_ca_cert = None
         client.Configuration.set_default(configuration)
@@ -50,17 +47,17 @@ def _load_token_auth(endpoint: str, ca_cert_b64: str, token: str):
 class K8sBackend:
     """Direct Kubernetes API client for GKE cluster.
 
-    Auth priority (simplest first):
+    Auth priority:
       1. K8S_TOKEN + K8S_ENDPOINT + K8S_CA_CERT — bearer token (works everywhere)
       2. In-cluster config (if running inside the GKE cluster)
-      3. KUBECONFIG / ~/.kube/config (local dev with gcloud configured)
+      3. KUBECONFIG / ~/.kube/config (local dev)
     """
 
     def __init__(self):
         self.connected = False
         token = os.environ.get("K8S_TOKEN")
-        endpoint = os.environ.get("K8S_ENDPOINT")       # https://34.169.10.97
-        ca_cert = os.environ.get("K8S_CA_CERT")          # base64 CA cert
+        endpoint = os.environ.get("K8S_ENDPOINT")
+        ca_cert = os.environ.get("K8S_CA_CERT")
 
         try:
             if token and endpoint and ca_cert:
@@ -81,18 +78,11 @@ class K8sBackend:
         self.v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
 
-        # Path to sample app manifests (friend provides these)
         self.manifests_dir = os.environ.get("MANIFESTS_DIR", "./sample_app")
         self.app_namespaces = ["payments", "frontend", "auth"]
 
-    # =========================================================
-    # EXECUTE — run kubectl-equivalent commands via K8s API
-    # =========================================================
-
     def execute(self, command: str) -> str:
-        """Parse a kubectl-style command string and execute via K8s API.
-        Returns formatted text output matching real kubectl format."""
-
+        """Parse a kubectl-style command string and execute via K8s API."""
         if command.startswith("diagnose:"):
             return "Diagnosis recorded. Continue investigating or apply a fix."
         if command.startswith("fix:"):
@@ -141,12 +131,10 @@ class K8sBackend:
             return "__all__"
         return None
 
-    # --- GET ---
     def _cmd_get(self, parts, ns):
         if not parts:
             return "error: resource type required"
         resource = parts[0]
-
         if resource in ("pods", "pod", "po"):
             return self._get_pods(ns)
         elif resource in ("deployments", "deploy"):
@@ -160,7 +148,7 @@ class K8sBackend:
         elif resource in ("resourcequota", "quota"):
             return self._get_resourcequotas(ns)
         else:
-            return f"error: the server doesn't have a resource type \"{resource}\""
+            return f'error: the server doesn\'t have a resource type "{resource}"'
 
     def _get_pods(self, ns):
         if ns == "__all__":
@@ -193,7 +181,6 @@ class K8sBackend:
             deploys = self.apps_v1.list_namespaced_deployment(ns)
         else:
             deploys = self.apps_v1.list_deployment_for_all_namespaces()
-
         lines = ["NAME              READY   UP-TO-DATE   AVAILABLE   AGE"]
         for d in deploys.items:
             name = d.metadata.name[:18].ljust(18)
@@ -209,7 +196,6 @@ class K8sBackend:
             events = self.v1.list_namespaced_event(ns)
         else:
             events = self.v1.list_event_for_all_namespaces()
-
         lines = ["LAST SEEN   TYPE      REASON           OBJECT              MESSAGE"]
         for e in sorted(events.items, key=lambda x: x.metadata.creation_timestamp or "")[-20:]:
             age = self._format_age(e.last_timestamp or e.metadata.creation_timestamp)
@@ -262,12 +248,10 @@ class K8sBackend:
                 lines.append(f"{resource.ljust(12)}{str(used).ljust(8)}{hard}")
         return "\n".join(lines)
 
-    # --- DESCRIBE ---
     def _cmd_describe(self, parts, ns):
         if len(parts) < 2:
             return "error: resource name required"
         rtype, rname = parts[0], parts[1]
-
         if rtype in ("pod", "pods", "po"):
             return self._describe_pod(rname, ns)
         elif rtype in ("deployment", "deploy"):
@@ -277,7 +261,6 @@ class K8sBackend:
         return f"error: unsupported describe for {rtype}"
 
     def _describe_pod(self, name, ns):
-        """Find pod by partial name match, return describe-style output."""
         namespace = ns or "default"
         pods = self.v1.list_namespaced_pod(namespace)
         pod = None
@@ -332,13 +315,11 @@ class K8sBackend:
                 for e in c.env:
                     lines.append(f"      {e.name}: {e.value}")
 
-        # Events for this pod
         events = self.v1.list_namespaced_event(namespace,
             field_selector=f"involvedObject.name={pod.metadata.name}")
         if events.items:
             lines.append("Events:")
             for e in events.items[-10:]:
-                age = self._format_age(e.last_timestamp or e.metadata.creation_timestamp)
                 lines.append(f"  {e.type}\t{e.reason}\t{e.message}")
 
         return "\n".join(lines)
@@ -362,18 +343,13 @@ class K8sBackend:
             n = self.v1.read_node(name)
         except ApiException:
             return f'Error from server (NotFound): nodes "{name}" not found'
-        lines = [
-            f"Name:         {n.metadata.name}",
-            f"Allocatable:  cpu={n.status.allocatable.get('cpu')}, memory={n.status.allocatable.get('memory')}",
-        ]
-        return "\n".join(lines)
+        return f"Name:         {n.metadata.name}\nAllocatable:  cpu={n.status.allocatable.get('cpu')}, memory={n.status.allocatable.get('memory')}"
 
     def _format_probe(self, probe):
         if probe.http_get:
             return f"http-get {probe.http_get.path}:{probe.http_get.port} delay={probe.initial_delay_seconds}s period={probe.period_seconds}s"
         return "configured"
 
-    # --- LOGS ---
     def _cmd_logs(self, parts, ns):
         if not parts:
             return "error: pod name required"
@@ -391,7 +367,6 @@ class K8sBackend:
         matched = next((p for p in pods.items if pod_name in p.metadata.name), None)
         if not matched:
             return f'Error from server (NotFound): pods "{pod_name}" not found'
-
         try:
             logs = self.v1.read_namespaced_pod_log(
                 matched.metadata.name, namespace,
@@ -400,7 +375,6 @@ class K8sBackend:
         except ApiException as e:
             return f"Error: {e.reason}"
 
-    # --- TOP ---
     def _cmd_top(self, parts, ns):
         if not parts:
             return "error: resource type required"
@@ -417,7 +391,6 @@ class K8sBackend:
                 metrics = api.list_namespaced_custom_object("metrics.k8s.io", "v1beta1", ns, "pods")
             else:
                 metrics = api.list_cluster_custom_object("metrics.k8s.io", "v1beta1", "pods")
-
             lines = ["NAME                              CPU(cores)   MEMORY(bytes)"]
             for item in metrics.get("items", []):
                 name = item["metadata"]["name"][:34].ljust(34)
@@ -443,7 +416,6 @@ class K8sBackend:
         except Exception:
             return "error: Metrics API not available."
 
-    # --- MUTATING COMMANDS ---
     def _cmd_rollout(self, parts, ns):
         if parts and parts[0] == "restart" and len(parts) > 1:
             deploy_name = parts[1].replace("deployment/", "")
@@ -462,7 +434,6 @@ class K8sBackend:
         namespace = ns or "default"
         if not parts:
             return "error: subcommand required"
-
         if parts[0] == "resources":
             return self._set_resources(parts[1:], namespace)
         elif parts[0] == "image":
@@ -603,15 +574,10 @@ class K8sBackend:
             return f"Error: {str(e)}"
         return "error: unsupported patch target"
 
-    # =========================================================
-    # FAILURE INJECTION
-    # =========================================================
-
     def inject_failure(self, failure_type: str, params: dict) -> str:
         """Inject a real failure into the GKE cluster."""
         ns = params.get("namespace", "payments")
         deploy = params.get("deployment", "payment-api")
-
         injectors = {
             "oom_kill": self._inject_oom,
             "crashloop": self._inject_crashloop,
@@ -685,30 +651,22 @@ class K8sBackend:
         time.sleep(5)
         return "Injected cascading failure: redis OOM -> payment-api errors -> frontend 502"
 
-    # =========================================================
-    # RESET & HEALTH
-    # =========================================================
-
     def reset(self):
         """Reset cluster to healthy state by reapplying manifests."""
         import subprocess
-
         for ns in self.app_namespaces:
             try:
                 self.v1.delete_namespace(ns)
             except ApiException:
                 pass
-
         for _ in range(60):
             existing = [ns.metadata.name for ns in self.v1.list_namespace().items]
             if not any(ns in existing for ns in self.app_namespaces):
                 break
             time.sleep(2)
-
         if os.path.exists(self.manifests_dir):
             subprocess.run(["kubectl", "apply", "-f", self.manifests_dir],
                          capture_output=True, timeout=60)
-
         for _ in range(60):
             health = self.check_health()
             all_running = all(
@@ -736,10 +694,6 @@ class K8sBackend:
             except ApiException:
                 health[ns] = {}
         return health
-
-    # =========================================================
-    # HELPERS
-    # =========================================================
 
     def _format_age(self, timestamp):
         if not timestamp:

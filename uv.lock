@@ -1150,7 +1150,7 @@ wheels = [
 [[package]]
 name = "openenv-core"
 version = "0.2.1"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/meta-pytorch/OpenEnv.git?rev=v0.2.1#94a3e0dff7cfd7f25af34a56a3e5fbdfa2ef710a" }
 dependencies = [
     { name = "fastapi" },
     { name = "fastmcp" },
@@ -1166,10 +1166,6 @@ dependencies = [
     { name = "uvicorn" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d1/d3/d2cef0e459158c9410f073ffd2ad6eca7c09232e7c53d4987acc0b942d28/openenv_core-0.2.1.tar.gz", hash = "sha256:0caa44411af7d866e451e50744d1adab57cdf9a2cf7a1b3f81042675110aebc7", size = 102728, upload-time = "2026-02-04T10:25:24.263Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/5a/a7f8b0e53eac45faedcf6fbfacdd28a104f815d3471f2deceefb4234d8be/openenv_core-0.2.1-py3-none-any.whl", hash = "sha256:5868722833df3220b7a3288f581e6c0825c2d8fae42d932ff90d2bb60765813a", size = 121855, upload-time = "2026-02-04T10:25:22.82Z" },
-]
 
 [package.optional-dependencies]
 core = [
@@ -1181,7 +1177,7 @@ core = [
 ]
 
 [[package]]
-name = "openenv-kube-sre-env"
+name = "openenv-kube-sre-gym"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -1207,7 +1203,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=0.20.0" },
     { name = "kubernetes", specifier = ">=28.0.0" },
     { name = "openai", specifier = ">=1.0.0" },
-    { name = "openenv-core", extras = ["core"], specifier = ">=0.2.0" },
+    { name = "openenv-core", extras = ["core"], git = "https://github.com/meta-pytorch/OpenEnv.git?rev=v0.2.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "requests", specifier = ">=2.25.0" },

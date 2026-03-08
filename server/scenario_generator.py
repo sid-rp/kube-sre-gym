@@ -2,11 +2,14 @@ import json
 import logging
 import random
 from .llm_client import LLMClient
-from models import ScenarioSpec
+
+try:
+    from ..models import ScenarioSpec
+except ImportError:
+    from models import ScenarioSpec
 
 logger = logging.getLogger(__name__)
 
-# What the backend can actually inject into GKE
 INJECTABLE_FAILURES = {
     "oom_kill": "Sets memory limit to 4Mi — pod OOMKills (exit code 137)",
     "crashloop": "Changes container command to 'exit 1' — CrashLoopBackOff",
@@ -23,7 +26,6 @@ TOPOLOGY = {
     "auth": ["auth-service", "token-store"],
 }
 
-# Simple scenario pool — used in simple mode and as LLM fallback
 SCENARIO_POOL = [
     ScenarioSpec(
         failure_type="oom_kill", namespace="payments", deployment="payment-api",
@@ -132,11 +134,6 @@ class ScenarioGenerator:
 Target difficulty: {difficulty:.2f}/1.0
 Agent skill profile: {json.dumps(skill_profile) if skill_profile else "no history yet"}
 Weak spots to target: {weak_spots if weak_spots else "any"}
-
-Difficulty guide:
-  < 0.4: single service, obvious symptoms
-  0.4-0.7: requires correlating multiple signals
-  > 0.7: cascading failures, misleading symptoms
 
 Return JSON:
 {{

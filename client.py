@@ -1,41 +1,41 @@
-"""Kube SRE Environment Client."""
+"""Kube SRE Gym Environment Client."""
 
 from typing import Dict
 
 from openenv.core.client_types import StepResult
 from openenv.core import EnvClient
 
-from .models import K8sSREAction, K8sSREObservation, K8sSREState
+from .models import KubeSreGymAction, KubeSreGymObservation, KubeSreGymState
 
 
-class K8sSREEnv(
-    EnvClient[K8sSREAction, K8sSREObservation, K8sSREState]
+class KubeSreGymEnv(
+    EnvClient[KubeSreGymAction, KubeSreGymObservation, KubeSreGymState]
 ):
     """
-    Client for the K8s SRE Environment.
+    Client for the K8s SRE Gym Environment.
 
     Example:
-        >>> with K8sSREEnv(base_url="http://localhost:8000") as client:
+        >>> with KubeSreGymEnv(base_url="http://localhost:8000") as client:
         ...     result = client.reset()
         ...     print(result.observation.command_output)
-        ...     result = client.step(K8sSREAction(command="kubectl get pods -A"))
+        ...     result = client.step(KubeSreGymAction(command="kubectl get pods -A"))
         ...     print(result.observation.command_output)
 
     Example with Docker:
-        >>> client = K8sSREEnv.from_docker_image("kube_sre_env-env:latest")
+        >>> client = KubeSreGymEnv.from_docker_image("kube_sre_gym-env:latest")
         >>> try:
         ...     result = client.reset()
-        ...     result = client.step(K8sSREAction(command="kubectl get pods -A"))
+        ...     result = client.step(KubeSreGymAction(command="kubectl get pods -A"))
         ... finally:
         ...     client.close()
     """
 
-    def _step_payload(self, action: K8sSREAction) -> Dict:
+    def _step_payload(self, action: KubeSreGymAction) -> Dict:
         return {"command": action.command}
 
-    def _parse_result(self, payload: Dict) -> StepResult[K8sSREObservation]:
+    def _parse_result(self, payload: Dict) -> StepResult[KubeSreGymObservation]:
         obs_data = payload.get("observation", {})
-        observation = K8sSREObservation(
+        observation = KubeSreGymObservation(
             command_output=obs_data.get("command_output", ""),
             cluster_status_summary=obs_data.get("cluster_status_summary", ""),
             active_alerts=obs_data.get("active_alerts", []),
@@ -52,8 +52,8 @@ class K8sSREEnv(
             done=payload.get("done", False),
         )
 
-    def _parse_state(self, payload: Dict) -> K8sSREState:
-        return K8sSREState(
+    def _parse_state(self, payload: Dict) -> KubeSreGymState:
+        return KubeSreGymState(
             episode_id=payload.get("episode_id"),
             step_count=payload.get("step_count", 0),
             incident_id=payload.get("incident_id", ""),

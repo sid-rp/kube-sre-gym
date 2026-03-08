@@ -1,7 +1,6 @@
 spec_version: 1
-name: kube_sre_env
+name: kube_sre_gym
 type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
-

@@ -1,5 +1,5 @@
 """
-FastAPI application for the Kube SRE Environment.
+FastAPI application for the Kube SRE Gym Environment.
 
 Endpoints:
     - POST /reset: Reset the environment
@@ -12,23 +12,21 @@ Usage:
     uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
 """
 
+# Support both in-repo and standalone imports
 try:
     from openenv.core.env_server.http_server import create_app
-except Exception as e:
-    raise ImportError(
-        "openenv is required. Install dependencies with 'uv sync'"
-    ) from e
+    from ..models import KubeSreGymAction, KubeSreGymObservation
+    from .kube_sre_gym_environment import KubeSreGymEnvironment
+except ImportError:
+    from openenv.core.env_server.http_server import create_app
+    from models import KubeSreGymAction, KubeSreGymObservation
+    from server.kube_sre_gym_environment import KubeSreGymEnvironment
 
-# Import from local models.py (PYTHONPATH includes /app/env in Docker)
-from models import K8sSREAction, K8sSREObservation
-from .kube_sre_env_environment import KubeSreEnvironment
-
-# Create the app with web interface
 app = create_app(
-    KubeSreEnvironment,
-    K8sSREAction,
-    K8sSREObservation,
-    env_name="kube_sre_env",
+    KubeSreGymEnvironment,
+    KubeSreGymAction,
+    KubeSreGymObservation,
+    env_name="kube_sre_gym",
     max_concurrent_envs=1,
 )
 

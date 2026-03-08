@@ -1,7 +1,7 @@
 """
-Data models for the Kube SRE Environment.
+Data models for the Kube SRE Gym Environment.
 
-Defines Action, Observation, State dataclasses for K8s incident response.
+Defines Action, Observation, State for K8s incident response training.
 """
 
 from dataclasses import dataclass, field
@@ -10,12 +10,12 @@ from pydantic import Field
 from openenv.core.env_server.types import Action, Observation, State
 
 
-class K8sSREAction(Action):
+class KubeSreGymAction(Action):
     """Agent's action — a kubectl command or diagnosis/fix statement."""
     command: str = Field(..., min_length=1, description="kubectl command or diagnose:/fix: statement")
 
 
-class K8sSREObservation(Observation):
+class KubeSreGymObservation(Observation):
     """What the agent sees after each action."""
     command_output: str = Field(default="", description="Output from the last command")
     cluster_status_summary: str = Field(default="", description="Current cluster pod status")
@@ -25,7 +25,7 @@ class K8sSREObservation(Observation):
     hint: str = Field(default="", description="Hint for junior persona")
 
 
-class K8sSREState(State):
+class KubeSreGymState(State):
     """Episode metadata."""
     incident_id: str = ""
     difficulty: float = 0.2
