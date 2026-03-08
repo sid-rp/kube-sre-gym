@@ -92,6 +92,8 @@ class KubeSreGymEnvironment(Environment):
     def _do_reset(self) -> KubeSreGymObservation:
         # Step 1: Deploy clean healthy cluster (base manifests only)
         self.backend.reset()
+        # Extra settle time — K8s rollouts are async, pods need time to stabilize
+        time.sleep(10)
         logger.info("Cluster reset complete")
 
         skill_profile = self.curriculum.get_skill_profile()
@@ -126,6 +128,10 @@ class KubeSreGymEnvironment(Environment):
                 skill_profile, difficulty, fault_type_hint=fault_type
             )
             self.backend.inject_failure(self.scenario.failure_type, self.scenario.params)
+
+        # Wait for fault symptoms to manifest (OOMKill, CrashLoop, ImagePull)
+        logger.info("Waiting for fault symptoms to manifest...")
+        time.sleep(10)
 
         self._step_count = 0
         self.history = []
