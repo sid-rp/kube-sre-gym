@@ -37,6 +37,50 @@ from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 from trl.experimental.openenv import generate_rollout_completions
 
+# ---- TRL 0.29.0 / vLLM 0.11.x compatibility ----
+# TRL 0.29.0 expects vLLM logprobs as list-of-lists (top-k per token),
+# but vLLM 0.11.x returns plain floats. Patch until TRL releases a fix.
+# See: https://github.com/huggingface/trl/issues/4159
+_orig_gen = GRPOTrainer._generate_single_turn
+
+def _compat_generate_single_turn(self, prompts):
+    prompt_ids, completion_ids, logprobs, extra = _orig_gen(self, prompts)
+    return prompt_ids, completion_ids, logprobs, extra
+
+# The issue is in the line AFTER vllm_generation.generate() returns:
+#   logprobs = [[lp[0] for lp in seq] for seq in logprobs]
+# When vLLM 0.11.x already returns floats, lp[0] fails.
+# We patch vllm_generation.generate to wrap floats in lists.
+import trl.trainer.grpo_trainer as _grpo_mod
+
+_orig_vllm_gen = None
+
+def _patch_vllm_generate(trainer):
+    """Wrap vLLM generate to ensure logprobs are in top-k list format."""
+    global _orig_vllm_gen
+    if _orig_vllm_gen is not None or not hasattr(trainer, 'vllm_generation'):
+        return
+    _orig_vllm_gen = trainer.vllm_generation.generate
+
+    def _wrapped_generate(**kwargs):
+        result = _orig_vllm_gen(**kwargs)
+        prompt_ids, completion_ids, logprobs, *rest = result
+        # If logprobs are plain floats, wrap them in lists for TRL's lp[0]
+        if logprobs and logprobs[0] and isinstance(logprobs[0][0], float):
+            logprobs = [[[lp] for lp in seq] for seq in logprobs]
+        return (prompt_ids, completion_ids, logprobs, *rest)
+
+    trainer.vllm_generation.generate = _wrapped_generate
+
+# Patch trainer.train() to apply the fix before first generation
+_orig_train = GRPOTrainer.train
+
+def _patched_train(self, *args, **kwargs):
+    _patch_vllm_generate(self)
+    return _orig_train(self, *args, **kwargs)
+
+GRPOTrainer.train = _patched_train
+
 # Requires: pip install -e ".[train]"  (from repo root)
 from kube_sre_gym import KubeSreGymEnv, KubeSreGymAction
 
