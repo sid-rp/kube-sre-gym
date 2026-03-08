@@ -54,7 +54,8 @@ export K8S_CA_CERT=<base64-ca-cert>
 export HF_TOKEN=<hf-token>
 
 # 3. Start judge model (Terminal 1)
-trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001
+# Cap GPU memory to ~32GB so the agent training fits alongside
+trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001 --gpu_memory_utilization 0.4
 
 # 4. Start environment server (Terminal 2)
 LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 \
@@ -89,7 +90,7 @@ H100 (all-in-one)                              GKE Cluster
 │ vLLM :8001  Qwen3-14B (judge)    │
 │                                  │
 │ train.py  GRPO (TRL+vLLM)       │
-│  Qwen3-8B agent, G=4            │
+│  Qwen3-8B agent, BF16+LoRA, G=4 │
 └──────────────────────────────────┘
 ```
 

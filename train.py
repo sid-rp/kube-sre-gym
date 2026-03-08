@@ -32,6 +32,7 @@ from pathlib import Path
 from datasets import Dataset
 from transformers import AutoTokenizer
 
+from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 from trl.experimental.openenv import generate_rollout_completions
 
@@ -84,6 +85,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vllm-server-url", default="http://localhost:8000", help="vLLM server URL (server mode)")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--logging-steps", type=int, default=1)
+    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
+    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha (typically 2x rank)")
+    parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout")
     return parser.parse_args()
 
 
@@ -327,6 +331,16 @@ def main() -> None:
             "fix_reward": fix_rewards,
         }
 
+    # ---- LoRA config ----
+    peft_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    )
+
     # ---- Trainer ----
     trainer = GRPOTrainer(
         model=args.model_id,
@@ -339,6 +353,7 @@ def main() -> None:
         train_dataset=dataset,
         args=grpo_config,
         rollout_func=rollout_func,
+        peft_config=peft_config,
     )
 
     # ---- Train ----
