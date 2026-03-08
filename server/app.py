@@ -57,6 +57,14 @@ def main(host: str = "0.0.0.0", port: int = 8000):
         level=logging.INFO,
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
+    # Suppress noisy loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
 
     parser = argparse.ArgumentParser(description="Kube SRE Gym server")
     parser.add_argument("--port", type=int, default=port)
