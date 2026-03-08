@@ -267,6 +267,7 @@ def rollout_once(
         if not commands:
             step_rewards.append(-0.5)
             conversation_history.append({
+                "agent_text": completion_text[:500],
                 "command": completion_text[:100].strip(),
                 "output": "(no valid command parsed)",
                 "reward": -0.5,
@@ -285,6 +286,7 @@ def rollout_once(
                 cmd_output = getattr(observation, "command_output", "") or ""
                 hint = getattr(observation, "hint", "") or ""
                 conversation_history.append({
+                    "agent_text": completion_text[:500],
                     "command": cmd,
                     "output": cmd_output[:500],
                     "reward": reward,
@@ -313,6 +315,24 @@ def rollout_once(
     total_reward = sum(step_rewards) if step_rewards else -1.0
     diagnosis_score = diagnosis_rewards[-1] if diagnosis_rewards else 0.0
     fix_score = fix_rewards[-1] if fix_rewards else 0.0
+
+    # Save detailed agent transcript for eval/SFT
+    try:
+        import json
+        transcript_path = os.environ.get("AGENT_TRANSCRIPT_LOG", "agent_transcripts.jsonl")
+        initial_obs = getattr(observation, "command_output", "") or ""
+        agent_transcript = {
+            "total_reward": total_reward,
+            "diagnosis_reward": diagnosis_score,
+            "fix_reward": fix_score,
+            "num_steps": len(conversation_history),
+            "resolved": result.done and total_reward > 0,
+            "conversation": conversation_history,
+        }
+        with open(transcript_path, "a") as f:
+            f.write(json.dumps(agent_transcript) + "\n")
+    except Exception as e:
+        logger.warning(f"Failed to save agent transcript: {e}")
 
     return {
         "prompt_ids": prompt_ids,

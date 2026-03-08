@@ -316,6 +316,11 @@ class KubeSreGymEnvironment(Environment):
                     "tier": self.curriculum.get_tier_name(),
                     "alert": self.scenario.alert_message,
                     "root_cause": self.scenario.root_cause,
+                    "correct_fix": self.scenario.correct_fix_description,
+                    "initial_observation": {
+                        "cluster_status": self._state.curriculum_stats,
+                        "incident_type": self._state.incident_type,
+                    },
                     "history": self.history,
                 }
                 log_path = os.environ.get("EPISODE_LOG", "episode_transcripts.jsonl")
