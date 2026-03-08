@@ -474,6 +474,9 @@ def main() -> None:
         output_dir=str(output_dir),
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
+        lr_scheduler_type="constant_with_warmup",  # cosine/linear hurts GRPO
+        warmup_steps=2,
+        max_grad_norm=0.2,  # lower than default 1.0 for GRPO stability
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         per_device_train_batch_size=1,
         generation_batch_size=args.num_generations,
