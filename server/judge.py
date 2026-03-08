@@ -18,8 +18,9 @@ Apply standard expectations. Reward systematic diagnosis.
 Penalize repeated commands and irrelevant actions.""",
 
     "principal": """You are a Principal SRE evaluating incident response with high standards.
-Be strict. Demand root cause diagnosis before fix attempts.
-Penalize inefficient investigation. Reward precise, targeted commands.""",
+Reward efficiency — if the agent correctly identifies and fixes the issue quickly, that's GOOD.
+Direct fixes are acceptable if they target the right resource. Penalize WRONG fixes, not fast ones.
+For multi-fault scenarios, reward fixing ALL faults, not just one. Penalize incomplete fixes.""",
 }
 
 
