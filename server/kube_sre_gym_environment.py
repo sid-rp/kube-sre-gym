@@ -245,7 +245,7 @@ class KubeSreGymEnvironment(Environment):
         if self._step_count >= self.max_steps:
             done = True
             reward -= 0.2
-            feedback = "Timeout -- incident not resolved."
+            feedback = "Timeout -- incident remains unresolved."
 
         self.history.append({
             "step": self._step_count,
@@ -262,7 +262,7 @@ class KubeSreGymEnvironment(Environment):
                 track_type = f"adversarial:{self.scenario.name}"
 
             total_reward = sum(h["reward"] for h in self.history)
-            resolved = "resolved" in feedback.lower()
+            resolved = feedback == "Incident resolved! All pods healthy."
             self.curriculum.record(
                 failure_type=track_type,
                 success=resolved,
