@@ -177,6 +177,20 @@ class K8sBackend:
                 except ApiException as e:
                     logger.error(f"Failed to reset {deploy_name} in {ns}: {e.reason}")
 
+            # Clean up broken pods from old ReplicaSets (they won't self-heal)
+            try:
+                pods = self.v1.list_namespaced_pod(ns)
+                for p in pods.items:
+                    status = _pod_status(p)
+                    if status not in ("Running", "Completed", "ContainerCreating", "PodInitializing"):
+                        try:
+                            self.v1.delete_namespaced_pod(p.metadata.name, ns)
+                            logger.info(f"Deleted broken pod {p.metadata.name} ({status}) in {ns}")
+                        except ApiException:
+                            pass
+            except ApiException:
+                pass
+
             # Clean up injected resource quotas
             try:
                 quotas = self.v1.list_namespaced_resource_quota(ns)
