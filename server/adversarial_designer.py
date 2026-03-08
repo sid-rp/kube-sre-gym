@@ -192,12 +192,21 @@ HARD CONSTRAINTS — the scenario MUST be solvable:
 - Use container names from the healthy baseline (container_name field) for set image commands.
 - Keep it simple enough that a methodical agent can solve it within {max_steps} steps total.
 
+COMPLEXITY STRATEGY — what makes this HARDER than a single fault:
+- SPREAD faults across DIFFERENT namespaces (payments + frontend + auth) so the agent
+  must investigate multiple areas, not just one namespace
+- Use DIFFERENT fault types together (e.g., OOM + bad image + scale zero) so the agent
+  sees mixed symptoms (OOMKilled in one namespace, ImagePullBackOff in another, missing pods in a third)
+- Create RED HERRINGS: e.g., OOM on payment-gateway looks like a memory leak, but the
+  REAL root cause is that auth-service was scaled to zero causing retry storms
+- Order MATTERS: fix the upstream dependency first (e.g., fix auth-service before payment-api)
+- Make the agent investigate ALL namespaces — don't cluster faults in one place
+
 Think about this before generating:
-- What is the ONE root cause? (pick from fault types above)
-- What cascading effects does it cause? (e.g., auth down → payment-api retries → OOM)
-- What will the agent see first? (the symptom, not the cause)
-- What is misleading? (red herring — a symptom that looks like one fault type but is actually caused by another)
-- What is the correct SRE workflow? (what should the agent check first, second, etc.)
+- What combination of faults creates the most confusing symptoms?
+- Which fault should the agent find LAST? (hide it in a namespace they might not check first)
+- What order must the fixes be applied in? (upstream dependencies first)
+- What will the agent see in "kubectl get pods -A" that is misleading?
 
 STEP 5 — GENERATE THE SCENARIO
 
@@ -331,7 +340,7 @@ Agent skill profile: {json.dumps(skill_profile) if skill_profile else "no histor
 Weak spots to exploit: {weak_spots if weak_spots else "any — agent is new"}
 Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "none"}
 
-{"Design a complex multi-fault incident with " + str(max_mutations) + " faults. Use cascading failures across namespaces — e.g., auth DB misconfigured causing retry storms that OOM payment-api, plus a port conflict. Include red herrings." if difficulty > 0.7 else "Use at most " + str(max_mutations) + " fault(s). One root cause with clear cascading effects. Keep it solvable within the step budget." if difficulty > 0.5 else "Start with a single-fault scenario. One root cause, clear symptoms."}
+{"HARD MODE: Design a " + str(max_mutations) + "-fault compound incident spread across ALL 3 namespaces (payments, frontend, auth). Use DIFFERENT fault types for each (e.g., OOM in payments + bad image in frontend + scale-zero in auth). The agent must investigate every namespace to find all faults. Include a red herring where one symptom looks like it could be caused by a different fault." if difficulty > 0.7 else "Design a " + str(max_mutations) + "-fault incident across at least 2 namespaces. Use different fault types so the agent sees mixed symptoms (e.g., OOMKilled + ImagePullBackOff). Keep it solvable within the step budget." if difficulty > 0.5 else "Start with a single-fault scenario. One root cause, clear symptoms."}
 
 {"Focus on these weak areas: " + ", ".join(weak_spots) if weak_spots else ""}"""
 
