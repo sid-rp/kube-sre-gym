@@ -45,14 +45,6 @@ SCENARIO_POOL = [
         expected_diagnostic_path=["kubectl get pods -n payments", "kubectl logs payment-worker -n payments"],
     ),
     ScenarioSpec(
-        failure_type="liveness_probe", namespace="frontend", deployment="web-app",
-        params={"namespace": "frontend", "deployment": "web-app"},
-        root_cause="Liveness probe checking wrong path, pod keeps restarting",
-        difficulty=0.5, alert_message="WARNING: web-app pods restarting frequently",
-        correct_fix_description="Patch liveness probe to correct path",
-        expected_diagnostic_path=["kubectl get pods -n frontend", "kubectl describe pod web-app -n frontend"],
-    ),
-    ScenarioSpec(
         failure_type="resource_quota", namespace="payments", deployment="payment-api",
         params={"namespace": "payments"},
         root_cause="ResourceQuota too tight, blocking new pod creation",
@@ -60,7 +52,6 @@ SCENARIO_POOL = [
         correct_fix_description="Delete or increase the restrictive ResourceQuota",
         expected_diagnostic_path=["kubectl get pods -n payments", "kubectl get events -n payments"],
     ),
-    # --- Tier 2 additional: scale_zero on different deployments ---
     ScenarioSpec(
         failure_type="scale_zero", namespace="payments", deployment="payment-gateway",
         params={"namespace": "payments", "deployment": "payment-gateway"},
@@ -76,33 +67,6 @@ SCENARIO_POOL = [
         difficulty=0.35, alert_message="CRITICAL: auth-service has 0 available replicas, login failures",
         correct_fix_description="Scale auth-service back to 2 replicas",
         expected_diagnostic_path=["kubectl get pods -n auth", "kubectl get deployment auth-service -n auth"],
-    ),
-    # --- Tier 2 additional: bad_config on different deployments ---
-    ScenarioSpec(
-        failure_type="bad_config", namespace="payments", deployment="payment-api",
-        params={"namespace": "payments", "deployment": "payment-api"},
-        root_cause="DB_HOST env var set to invalid host — payment-api connection errors",
-        difficulty=0.4, alert_message="CRITICAL: payment-api connection refused errors",
-        correct_fix_description="Remove or fix the DB_HOST env var",
-        expected_diagnostic_path=["kubectl get pods -n payments", "kubectl logs payment-api -n payments"],
-    ),
-    # --- Tier 2 additional: liveness_probe on different deployment ---
-    ScenarioSpec(
-        failure_type="liveness_probe", namespace="payments", deployment="payment-gateway",
-        params={"namespace": "payments", "deployment": "payment-gateway"},
-        root_cause="Liveness probe path changed to nonexistent endpoint — pods keep restarting",
-        difficulty=0.5, alert_message="WARNING: payment-gateway frequent restarts, liveness probe failing",
-        correct_fix_description="Patch liveness probe back to correct path /",
-        expected_diagnostic_path=["kubectl get pods -n payments", "kubectl describe pod payment-gateway -n payments"],
-    ),
-    # --- Tier 3 ---
-    ScenarioSpec(
-        failure_type="cascading_db", namespace="frontend", deployment="frontend-cache",
-        params={"namespace": "frontend", "deployment": "frontend-cache"},
-        root_cause="Redis cache OOMKilled causing cascading failures across frontend services",
-        difficulty=0.8, alert_message="CRITICAL: Multiple services degraded",
-        correct_fix_description="Fix frontend-cache memory limits, restart dependent services",
-        expected_diagnostic_path=["kubectl get pods -A", "kubectl describe pod frontend-cache -n frontend"],
     ),
 ]
 

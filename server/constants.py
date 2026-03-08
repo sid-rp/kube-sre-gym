@@ -23,10 +23,8 @@ INJECTABLE_FAILURES = {
     "oom_kill": "Sets memory limit to 4Mi — pod OOMKills (exit code 137)",
     "crashloop": "Changes container command to 'exit 1' — CrashLoopBackOff",
     "image_pull": "Sets image to nonexistent tag — ImagePullBackOff/ErrImagePull",
-    "bad_config": "Sets DB_HOST env var to invalid host — app connection errors",
-    "liveness_probe": "Sets liveness probe to wrong path — pod restart loop",
+    "bad_config": "Sets DATABASE_URL to invalid host — payment-worker CrashLoopBackOff",
     "resource_quota": "Applies tight ResourceQuota — new pods blocked from scheduling",
-    "cascading_db": "OOMs redis — payment-api loses backend — frontend 502s",
     "scale_zero": "Scales deployment to 0 replicas — no pods running",
 }
 

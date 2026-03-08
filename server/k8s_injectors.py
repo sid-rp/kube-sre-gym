@@ -43,9 +43,7 @@ class FailureInjector:
             "crashloop": self._inject_crashloop,
             "image_pull": self._inject_image_pull,
             "bad_config": self._inject_bad_config,
-            "liveness_probe": self._inject_liveness_probe,
             "resource_quota": self._inject_resource_quota,
-            "cascading_db": self._inject_cascading,
             "scale_zero": self._inject_scale_zero,
         }
         fn = injectors.get(failure_type)
@@ -90,30 +88,6 @@ class FailureInjector:
         time.sleep(INJECT_WAIT_DEFAULT)
         return f"Injected bad config on {deploy} in {ns}"
 
-    def _inject_liveness_probe(self, ns: str, deploy: str) -> str:
-        try:
-            d = self.apps_v1.read_namespaced_deployment(deploy, ns)
-            injected = False
-            for c in d.spec.template.spec.containers:
-                if c.liveness_probe:
-                    if c.liveness_probe.http_get:
-                        c.liveness_probe.http_get.path = "/nonexistent-health-check"
-                        injected = True
-                    elif c.liveness_probe._exec:
-                        c.liveness_probe._exec.command = ["sh", "-c", "exit 1"]
-                        injected = True
-            if not injected:
-                # No existing probe — add a failing one
-                d.spec.template.spec.containers[0].liveness_probe = client.V1Probe(
-                    http_get=client.V1HTTPGetAction(path="/nonexistent-health-check", port=8080),
-                    initial_delay_seconds=1, period_seconds=3)
-                logger.warning(f"No liveness probe found on {deploy} in {ns} — injected a new failing one")
-            self.apps_v1.replace_namespaced_deployment(deploy, ns, d)
-            time.sleep(15)
-            return f"Injected liveness probe failure on {deploy} in {ns}"
-        except ApiException as e:
-            return f"Error: {e.reason}"
-
     def _inject_resource_quota(self, ns: str, _deploy: str) -> str:
         quota = client.V1ResourceQuota(
             metadata=client.V1ObjectMeta(name="tight-quota", namespace=ns),
@@ -135,8 +109,3 @@ class FailureInjector:
         except ApiException as e:
             return f"Error: {e.reason}"
 
-    def _inject_cascading(self, ns: str, deploy: str) -> str:
-        target = deploy or "frontend-cache"
-        self._inject_oom(ns, target)
-        time.sleep(5)
-        return f"Injected cascading failure: {target} OOM -> dependent services degraded"

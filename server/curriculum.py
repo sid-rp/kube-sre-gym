@@ -28,13 +28,11 @@ FAULT_TIERS = {
     "image_pull":      {"tier": 1, "min_difficulty": 0.0},
     # Tier 2 (medium, difficulty 0.3-0.6): requires investigation
     "bad_config":       {"tier": 2, "min_difficulty": 0.3},
-    "liveness_probe":   {"tier": 2, "min_difficulty": 0.3},
     "scale_zero":       {"tier": 2, "min_difficulty": 0.3},
-    # Tier 3 (hard, difficulty 0.6-0.8): multi-step diagnosis
+    # Tier 3 (hard, difficulty 0.6+): requires deeper investigation
     "resource_quota":  {"tier": 3, "min_difficulty": 0.6},
-    "cascading_db":    {"tier": 3, "min_difficulty": 0.6},
-    # Tier 4 (adversarial, difficulty 0.8+): LLM-designed compound faults
-    "adversarial":     {"tier": 4, "min_difficulty": 0.8},
+    # Tier 4 (adversarial, difficulty 0.6+): LLM-designed faults
+    "adversarial":     {"tier": 4, "min_difficulty": 0.6},
 }
 
 MASTERY_THRESHOLD = 0.7   # 70% success rate = mastered
@@ -185,8 +183,8 @@ class CurriculumController:
 
     def should_use_adversarial(self) -> bool:
         """Switch to adversarial LLM-designed scenarios when agent is ready."""
-        return (self.get_difficulty() >= 0.8
-                and len(self._graduated) >= 3)
+        return (self.get_difficulty() >= 0.6
+                and len(self._graduated) >= 2)
 
     def pick_fault_type(self) -> str | None:
         """
