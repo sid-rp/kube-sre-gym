@@ -456,8 +456,12 @@ class CommandHandler:
                 container_name = parts[i + 1]
             if p.startswith("--limits="):
                 for kv in p[len("--limits="):].split(","):
-                    k, v = kv.split("=", 1)
-                    limits[k] = v
+                    if "=" in kv:
+                        k, v = kv.split("=", 1)
+                        limits[k] = v
+                    else:
+                        # Handle --limits=256Mi (missing key) → assume memory
+                        limits["memory"] = kv
         if not deploy_name:
             return "error: deployment name required"
         try:
