@@ -576,9 +576,15 @@ class CommandHandler:
         import json
         namespace = ns or DEFAULT_NAMESPACE
         parts = raw_cmd.split()
-        if len(parts) < 3:
+        if len(parts) < 2:
             return "error: resource type and name required"
-        rtype, rname = parts[1], parts[2]
+        # Support both "patch deployment name" and "patch deployment/name"
+        if "/" in parts[1]:
+            rtype, rname = parts[1].split("/", 1)
+        elif len(parts) >= 3:
+            rtype, rname = parts[1], parts[2]
+        else:
+            return "error: resource type and name required"
 
         # Extract JSON patch body — find first '{' and match braces
         # Strip all single quotes first (shell quoting artifacts)
