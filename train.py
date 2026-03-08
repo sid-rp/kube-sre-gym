@@ -436,6 +436,7 @@ def main() -> None:
     reward_log_path = output_dir / args.reward_log
     output_dir.mkdir(parents=True, exist_ok=True)
     episode_counter = [0]  # mutable counter for closure
+    all_rewards = []  # track all episode rewards for running stats
 
     with open(reward_log_path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -443,12 +444,23 @@ def main() -> None:
 
     def _log_episode(total_r: float, diag_r: float, fix_r: float):
         episode_counter[0] += 1
+        all_rewards.append(total_r)
         with open(reward_log_path, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([episode_counter[0], total_r, diag_r, fix_r,
                              datetime.now().isoformat()])
-        logger.info(f"Episode {episode_counter[0]}: reward={total_r:.2f} "
-                    f"(diag={diag_r:.2f}, fix={fix_r:.2f})")
+
+        n = len(all_rewards)
+        mean_all = sum(all_rewards) / n
+        last10 = all_rewards[-10:]
+        mean_10 = sum(last10) / len(last10)
+        best = max(all_rewards)
+
+        logger.info(
+            f"Episode {episode_counter[0]}: reward={total_r:.2f} "
+            f"(diag={diag_r:.2f}, fix={fix_r:.2f}) | "
+            f"mean={mean_all:.2f}, mean(10)={mean_10:.2f}, best={best:.2f}"
+        )
 
     # ---- Rollout function (called by GRPOTrainer each step) ----
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
