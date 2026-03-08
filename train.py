@@ -52,35 +52,38 @@ SYSTEM_PROMPT = """You are an expert Kubernetes SRE (Site Reliability Engineer).
 You receive PagerDuty alerts about Kubernetes incidents and must diagnose and fix them.
 
 IMPORTANT RULES:
-- Always specify namespace with -n <namespace> (pods are in: payments, frontend, auth, hackathon)
+- Always specify namespace with -n <namespace> (pods are in: payments, frontend, auth)
 - Start with: kubectl get pods -n <namespace> to see actual pod names and status
 - Never guess pod names — always list pods first, then use exact names from the output
+- NEVER repeat a command you already ran — check your previous commands first
+- Output exactly ONE command. No explanations, no extra text. Just the command.
+
+CLUSTER TOPOLOGY:
+- payments namespace: payment-gateway (container: payment-gateway, image: nginx:1.25), payment-worker (container: payment-worker, image: busybox:1.36), payment-api (container: payment-api, image: python:3.11-slim)
+- frontend namespace: web-app (container: web-app, image: nginx:1.25), frontend-cache (container: frontend-cache, image: redis:7)
+- auth namespace: auth-service (container: auth-service, image: nginx:1.25)
 
 AVAILABLE COMMANDS:
-- kubectl get pods/deployments/events/services/nodes -n <ns>
+- kubectl get pods/deployments/events/services -n <ns>
 - kubectl describe pod/deployment <name> -n <ns>
-- kubectl logs <pod-name> -n <ns>
+- kubectl logs <pod-name> -n <ns> [--previous]
 - kubectl set image deployment/<name> <container>=<image> -n <ns>
-- kubectl set resources deployment/<name> --limits=memory=<val> -n <ns>
+- kubectl set resources deployment/<name> -c <container> --limits=memory=<val> -n <ns>
 - kubectl set env deployment/<name> KEY=VALUE -n <ns>
 - kubectl patch deployment <name> -n <ns> -p '{"spec":...}'
 - kubectl rollout restart deployment/<name> -n <ns>
 - kubectl scale deployment/<name> --replicas=N -n <ns>
 - kubectl delete pod <name> -n <ns>
 
-COMMON FIXES:
+COMMON FIXES (use the exact container names from CLUSTER TOPOLOGY above):
 - CrashLoopBackOff (bad command): kubectl patch deployment <name> -n <ns> -p '{"spec":{"template":{"spec":{"containers":[{"name":"<container>","command":null,"args":null}]}}}}'
-- OOMKilled: kubectl set resources deployment/<name> -c <container> --limits=memory=256Mi -n <ns>
-- ImagePullBackOff: kubectl set image deployment/<name> <container>=<correct-image> -n <ns>
+- OOMKilled (exit code 137): kubectl set resources deployment/<name> -c <container> --limits=memory=256Mi -n <ns>
+- ImagePullBackOff: kubectl set image deployment/<name> <container>=<correct-image-from-topology> -n <ns>
 - Bad env config: kubectl set env deployment/<name> KEY=CORRECT_VALUE -n <ns>
+- Liveness probe wrong path: kubectl patch deployment <name> -n <ns> -p '{"spec":{"template":{"spec":{"containers":[{"name":"<container>","livenessProbe":{"httpGet":{"path":"/","port":80}}}]}}}}'
 
-After diagnosis, submit:
-- diagnose: <your root cause analysis>
-- fix: kubectl <the exact fix command>
-
-Be systematic: list pods → describe/logs → diagnose → fix.
-Be efficient: minimize unnecessary commands.
-Output one command per line. No explanations, just commands."""
+WORKFLOW: list pods → describe/logs the broken pod → diagnose: <root cause> → fix: kubectl <command>
+After applying a fix, STOP. Do not repeat the fix or run more commands."""
 
 
 # ============================================================
@@ -168,14 +171,27 @@ def format_history(history: list[dict]) -> str:
 
 
 def parse_commands(text: str) -> list[str]:
-    """Extract kubectl/diagnose/fix commands from agent response."""
+    """Extract kubectl/diagnose/fix commands from agent response.
+
+    Returns at most 2 commands per turn to prevent the agent from spamming
+    duplicate commands in a single response. The system prompt tells the agent
+    to output one command at a time.
+    """
     commands = []
+    seen = set()
     for line in text.strip().split("\n"):
         line = line.strip()
         if line.startswith(("kubectl ", "diagnose:", "fix:")):
-            commands.append(line)
+            if line not in seen:
+                commands.append(line)
+                seen.add(line)
         elif line.startswith(("- kubectl", "* kubectl", "> kubectl")):
-            commands.append(line.lstrip("-*> "))
+            cmd = line.lstrip("-*> ")
+            if cmd not in seen:
+                commands.append(cmd)
+                seen.add(cmd)
+        if len(commands) >= 2:
+            break
     return commands
 
 

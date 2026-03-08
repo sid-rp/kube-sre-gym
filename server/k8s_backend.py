@@ -221,6 +221,17 @@ class K8sBackend:
                         p.metadata.name: _pod_status(p)
                         for p in pods.items
                     }
+                    # Aggressively delete broken pods on every poll — old RS pods
+                    # may still linger from previous episodes
+                    for p in pods.items:
+                        status = _pod_status(p)
+                        if status not in ("Running", "Completed", "ContainerCreating",
+                                          "PodInitializing", "Terminating"):
+                            try:
+                                self.v1.delete_namespaced_pod(p.metadata.name, ns)
+                                logger.info(f"Reset: deleted broken pod {p.metadata.name} ({status}) in {ns}")
+                            except ApiException:
+                                pass
                 except ApiException:
                     health[ns] = {}
 

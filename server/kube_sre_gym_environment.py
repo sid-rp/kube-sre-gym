@@ -244,11 +244,17 @@ class KubeSreGymEnvironment(Environment):
         if is_fix:
             # Allow rollout to progress before judging health (set/rollout/patch are async)
             # ContainerCreating/PodInitializing = fix is working, pod still starting
+            # Only check the affected namespace — other namespaces may have stale pods
             STARTING_STATES = ("ContainerCreating", "PodInitializing")
+            affected_ns = self.scenario.namespace if self.scenario else None
             for poll in range(12):
                 time.sleep(5)
                 health = self.backend.check_health()
-                statuses = [s for ns_pods in health.values() for s in ns_pods.values()]
+                if affected_ns and affected_ns in health:
+                    check_health = {affected_ns: health[affected_ns]}
+                else:
+                    check_health = health
+                statuses = [s for ns_pods in check_health.values() for s in ns_pods.values()]
                 total_count = len(statuses)
                 healthy_count = sum(1 for s in statuses if s in ("Running", "Completed"))
                 starting_count = sum(1 for s in statuses if s in STARTING_STATES)

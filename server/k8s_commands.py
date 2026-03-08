@@ -312,6 +312,7 @@ class CommandHandler:
         namespace = ns or DEFAULT_NAMESPACE
         tail = 50
         container = None
+        previous = False
         for i, p in enumerate(parts):
             if p.startswith("--tail="):
                 try:
@@ -320,6 +321,8 @@ class CommandHandler:
                     pass
             if p == "-c" and i + 1 < len(parts):
                 container = parts[i + 1]
+            if p in ("--previous", "-p"):
+                previous = True
 
         pods = self.v1.list_namespaced_pod(namespace)
         matched = next((p for p in pods.items if pod_name in p.metadata.name), None)
@@ -327,7 +330,8 @@ class CommandHandler:
             return f'Error from server (NotFound): pods "{pod_name}" not found'
         try:
             logs = self.v1.read_namespaced_pod_log(
-                matched.metadata.name, namespace, container=container, tail_lines=tail)
+                matched.metadata.name, namespace, container=container,
+                tail_lines=tail, previous=previous)
             return logs if logs else "(no logs)"
         except ApiException as e:
             return f"Error: {e.reason}"
