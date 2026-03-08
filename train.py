@@ -27,6 +27,9 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+# Help PyTorch reuse fragmented GPU memory (critical for TRL+vLLM colocate on 80GB)
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # Silence TRL experimental warning for rollout_func
 os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
 
