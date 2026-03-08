@@ -57,20 +57,27 @@ class K8sBackend:
         self.manifests_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sample_app")
         self.app_namespaces = APP_NAMESPACES
 
-        endpoint = os.environ.get("K8S_ENDPOINT")
-        ca_cert_b64 = os.environ.get("K8S_CA_CERT")
-        token = os.environ.get("K8S_TOKEN")
-
-        if endpoint and ca_cert_b64 and token:
-            _load_token_auth(endpoint, ca_cert_b64, token)
-            logger.info(f"K8s auth: token-based ({endpoint})")
-        else:
+        # Auth priority: kubeconfig > in-cluster > token-based
+        # kubeconfig has full RBAC (dev/Jupyter), token may have limited permissions
+        try:
+            config.load_kube_config()
+            logger.info("K8s auth: kubeconfig")
+        except config.ConfigException:
             try:
                 config.load_incluster_config()
                 logger.info("K8s auth: in-cluster")
             except config.ConfigException:
-                config.load_kube_config()
-                logger.info("K8s auth: kubeconfig")
+                endpoint = os.environ.get("K8S_ENDPOINT")
+                ca_cert_b64 = os.environ.get("K8S_CA_CERT")
+                token = os.environ.get("K8S_TOKEN")
+                if endpoint and ca_cert_b64 and token:
+                    _load_token_auth(endpoint, ca_cert_b64, token)
+                    logger.info(f"K8s auth: token-based ({endpoint})")
+                else:
+                    raise RuntimeError(
+                        "No K8s auth available. Set kubeconfig, run in-cluster, "
+                        "or set K8S_ENDPOINT + K8S_TOKEN + K8S_CA_CERT env vars."
+                    )
 
         self.v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
