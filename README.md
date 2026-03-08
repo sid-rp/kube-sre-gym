@@ -13,163 +13,201 @@ tags:
 
 # Kube SRE Gym
 
-A Kubernetes SRE training environment where an RL agent diagnoses and fixes real GKE cluster incidents. Features curriculum-driven difficulty, LLM-based judging, and dynamic scenario generation.
+**A self-improving Kubernetes SRE agent trained on real cluster incidents using GRPO.**
 
-## Quick Start
+An RL agent learns to diagnose and fix production Kubernetes failures — OOMKills, CrashLoopBackOffs, bad images, misconfigured env vars — by operating on a **real GKE cluster**, not a simulator. An LLM judge scores each action, a curriculum controller escalates difficulty, and an adversarial designer creates novel multi-fault incidents. The agent improves through Group Relative Policy Optimization (GRPO).
 
-Install the environment client:
+## How It Works
 
-```bash
-pip install git+https://huggingface.co/spaces/openenv-community/kube-sre-gym
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        SELF-IMPROVING LOOP                         │
+│                                                                    │
+│  ┌──────────┐    ┌───────────┐    ┌──────────┐    ┌────────────┐  │
+│  │Adversarial│───►│  Real GKE  │───►│  Agent   │───►│ LLM Judge  │  │
+│  │ Designer  │    │  Cluster   │    │(Qwen 0.6B│    │(Claude/    │  │
+│  │(Claude)   │    │            │    │  + LoRA)  │    │ Qwen 14B)  │  │
+│  └─────▲─────┘    └────────────┘    └────┬─────┘    └─────┬──────┘  │
+│        │                                 │                │         │
+│        │         ┌──────────────┐        │     reward     │         │
+│        │         │  Curriculum  │◄───────┴────────────────┘         │
+│        └─────────│  Controller  │                                   │
+│     weak spots   │  (mastery    │──► GRPO gradient update           │
+│     & difficulty │   tracking)  │    (TRL + vLLM on H100)           │
+│                  └──────────────┘                                   │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-Use the environment:
+### The Loop
+
+1. **Adversarial Designer** (Claude) creates targeted incidents based on the agent's weak spots — single faults for warmup, multi-fault cascading failures for harder tiers
+2. **Fault Injection** executes real `kubectl` commands against a live GKE cluster (set memory to 4Mi, inject bad images, corrupt env vars, scale to zero)
+3. **Agent** (Qwen3-0.6B + LoRA) receives a PagerDuty-style alert and must diagnose + fix using only kubectl commands — no hints about cluster topology
+4. **LLM Judge** scores each action for SRE workflow correctness (triage → investigate → fix → verify) and verifies resolution by checking actual cluster state
+5. **Curriculum Controller** tracks per-fault-type mastery and escalates difficulty — the agent gets harder scenarios as it improves
+6. **GRPO** computes advantages across 8 parallel rollouts and updates the policy — the agent gets better at fixing incidents it previously failed
+
+### What Makes This Different
+
+- **Real cluster, not a simulator** — kubectl commands execute against live GKE pods. OOMKills, CrashLoopBackOffs, and ImagePullBackOffs are real Kubernetes events
+- **Self-generating scenarios** — the adversarial designer creates new incident types targeting the agent's weaknesses, so the training distribution adapts as the agent learns
+- **Multi-layer verification** — programmatic health checks (expected pod count, restart tracking, OOM detection) + LLM judge verification prevents false resolution
+- **No hardcoded knowledge** — the agent prompt contains zero information about cluster topology, namespace names, or deployment details. It must discover everything via `kubectl get pods -A`
+
+## Architecture
+
+```
+H100 GPU (80GB)                              GKE Cluster (3 namespaces)
+┌──────────────────────────────────┐          ┌─────────────────────────┐
+│                                  │          │ payments/               │
+│  OpenEnv Server :8000            │  K8s API │   payment-api (Flask)   │
+│  ├─ Environment (reset/step)     │◄────────►│   payment-gateway       │
+│  ├─ Fault Injector               │          │   payment-worker        │
+│  ├─ Curriculum Controller        │          │                         │
+│  ├─ Adversarial Designer ──────────►Claude  │ frontend/               │
+│  └─ LLM Judge ─────────────────────►Claude  │   web-app (nginx)       │
+│                                  │          │   frontend-cache        │
+│  GRPO Trainer (TRL 0.29.0)       │          │                         │
+│  ├─ Qwen3-0.6B + LoRA (BF16)    │          │ auth/                   │
+│  ├─ vLLM colocate (inference)    │          │   auth-service          │
+│  └─ 8 rollouts × grad_accum=8   │          └─────────────────────────┘
+│                                  │
+└──────────────────────────────────┘
+```
+
+## Failure Types
+
+| Type | What Gets Injected | What Agent Must Do |
+|------|--------------------|--------------------|
+| `oom_kill` | Memory limit set to 4Mi | Increase to 128Mi via `kubectl set resources` |
+| `crashloop` | Container command set to `exit 1` | Remove bad command via `kubectl patch` |
+| `image_pull` | Image set to `nginx:nonexistent-tag-99999` | Fix image tag via `kubectl set image` |
+| `bad_config` | DATABASE_URL pointed to `wrong-host.invalid` | Correct env var via `kubectl set env` |
+| `scale_zero` | Replicas set to 0 | Scale back up via `kubectl scale` |
+| `liveness_probe` | Probe path set to `/nonexistent` | Fix probe via `kubectl patch` |
+| `multi-fault` | 2-3 faults across different namespaces | Find and fix ALL faults |
+
+## Training Signal
+
+The reward function has multiple layers to ensure clean GRPO signal:
+
+- **Per-step LLM judge score** (-1.0 to +1.0) — evaluates SRE workflow quality
+- **Error penalty** — commands returning "Error: Not Found" capped at -0.2
+- **Repeat penalty** — -0.15 per repeated command
+- **Resolution bonus** — +1.0 to +5.0 for confirmed fixes (efficiency-scaled)
+- **Timeout penalty** — failed episodes wiped to net -2.0 total reward
+- **Judge verification** — LLM confirms fix is real by reviewing cluster state + action history
+
+This produces clear separation: successful episodes score +3 to +8, failed episodes score -2.0. GRPO needs this variance to compute meaningful advantages.
+
+## Quick Start
 
 ```python
 from kube_sre_gym import KubeSreGymAction, KubeSreGymEnv
 
 with KubeSreGymEnv(base_url="http://localhost:8000") as client:
-    result = client.reset()
-    print(result.observation.command_output)
+    obs = client.reset()
+    print(obs.observation.command_output)  # PagerDuty alert
 
-    result = client.step(KubeSreGymAction(command="kubectl get pods -A"))
-    print(result.observation.cluster_status_summary)
-
-    result = client.step(KubeSreGymAction(command="diagnose: OOMKill due to low memory limits"))
-    result = client.step(KubeSreGymAction(command="fix: kubectl set resources deployment/payment-api --limits=memory=256Mi -n payments"))
+    obs = client.step(KubeSreGymAction(command="kubectl get pods -A"))
+    obs = client.step(KubeSreGymAction(command="kubectl describe pod payment-api-xxx -n payments"))
+    obs = client.step(KubeSreGymAction(command="fix: kubectl set resources deployment/payment-api --limits=memory=128Mi -n payments"))
+    # reward > 0 if fix is correct, episode done
 ```
 
-## Training (H100)
+## Training on H100
 
-You need 3 terminals. The env server talks to your GKE cluster, the judge model scores agent actions, and train.py runs GRPO.
-
-**Step 1 — Install**
+**Install**
 ```bash
 git clone https://huggingface.co/spaces/openenv-community/kube-sre-gym && cd kube-sre-gym
 pip install -e ".[train]"
 ```
 
-**Step 2 — Set credentials** (add to your `.bashrc` or export in each terminal)
+**Set credentials**
 ```bash
-export K8S_TOKEN=<gke-token>           # GKE service account bearer token
-export K8S_ENDPOINT=<gke-api-url>      # e.g. https://35.x.x.x
-export K8S_CA_CERT=<base64-ca-cert>    # base64-encoded cluster CA
-export HF_TOKEN=<hf-token>             # for pushing model checkpoints
+export K8S_TOKEN=<gke-bearer-token>
+export K8S_ENDPOINT=<gke-api-url>
+export K8S_CA_CERT=<base64-ca-cert>
+export ANTHROPIC_API_KEY=<key>       # for adversarial designer + judge
+export HF_TOKEN=<token>              # for pushing checkpoints
 ```
 
-**Step 3 — Launch** (3 terminals)
+**Launch (2 terminals)**
 ```bash
-# Terminal 1: Judge model (~32GB VRAM)
-trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001 --gpu_memory_utilization 0.4
-
-# Terminal 2: Environment server
-LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 uv run server
-
-# Terminal 3: GRPO training (~48GB VRAM)
-python train.py --vllm-mode colocate
-```
-
-The curriculum starts with easy faults (OOM, crashloop, bad image) and automatically progresses to harder ones as the agent improves. No manual difficulty tuning needed.
-
-## Adversarial Mode (External Judge)
-
-Uses Claude as judge + scenario designer instead of the self-hosted Qwen model. Frees up the full 80GB for the training agent.
-
-```bash
-# Terminal 1: Environment server (no vLLM judge needed)
-export ANTHROPIC_API_KEY=sk-ant-...
+# Terminal 1: Environment server
 GYM_MODE=adversarial LLM_BACKEND=anthropic uv run server
 
-# Terminal 2: GRPO training (full GPU)
-python train.py --vllm-mode colocate
+# Terminal 2: GRPO training
+python train.py --vllm-mode colocate --num-generations 8 --max-steps 8 --save-steps 1 \
+  --push-to-hub --hub-repo your-name/k8s-sre-agent
 ```
 
-In adversarial mode, Claude designs multi-step incidents with cascading failures and red herrings, injects them into the cluster, and scores agent actions using phase-aware SRE workflow evaluation.
+The curriculum automatically progresses: warmup (single faults) → intermediate (harder faults) → expert (multi-fault adversarial scenarios designed by Claude).
 
-## Development
+## Evaluation
 
 ```bash
-# Install in editable mode
-cd kube-sre-gym
-pip install -e .
-
-# Run server locally
-uv run server
+# Compare base model vs trained checkpoint
+python eval.py
 ```
 
-## Architecture
+Runs both models through random adversarial scenarios and reports resolution rate, average reward, and steps-to-fix.
 
-Everything runs on the H100. HF Hub is just for code + model weights.
-
-```
-H100 (all-in-one)                              GKE Cluster
-┌──────────────────────────────────┐          ┌─────────────────────┐
-│ OpenEnv server  :8000            │  k8s     │ payments ns         │
-│  reset/step/state                │──client──►│ frontend ns         │
-│  Curriculum → Judge → vLLM :8001 │          │ auth ns             │
-│                                  │          │ hackathon ns        │
-│ vLLM :8001  Qwen3-14B (judge)    │          └─────────────────────┘
-│                                  │
-│ train.py  GRPO (TRL+vLLM)       │
-│  Qwen3-8B agent, BF16+LoRA, G=4 │
-└──────────────────────────────────┘
-```
-
-Each episode: reset deploys clean healthy pods → curriculum picks one fault → injects it → agent investigates and fixes → judge scores → curriculum tracks mastery.
-
-## Failure Types
-
-| Type | Description |
-|------|-------------|
-| `oom_kill` | Memory limit too low, pod OOMKills |
-| `crashloop` | Bad container command, CrashLoopBackOff |
-| `image_pull` | Nonexistent image tag, ImagePullBackOff |
-| `bad_config` | Wrong DB_HOST env var, connection errors |
-| `liveness_probe` | Wrong probe path, restart loop |
-| `resource_quota` | Tight quota blocks pod creation |
-| `cascading_db` | Redis OOM cascades to payment-api and frontend |
-
-## Configuration (Environment Variables)
+## Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `K8S_TOKEN` | Bearer token for GKE | - |
-| `K8S_ENDPOINT` | GKE API endpoint | - |
-| `K8S_CA_CERT` | Base64 CA cert | - |
+| `K8S_TOKEN` | Bearer token for GKE | required |
+| `K8S_ENDPOINT` | GKE API endpoint | required |
+| `K8S_CA_CERT` | Base64 CA cert | required |
 | `GYM_MODE` | `standard` or `adversarial` | `standard` |
 | `LLM_BACKEND` | `openai`, `hf`, or `anthropic` | `openai` |
-| `LLM_BASE_URL` | vLLM judge endpoint | `http://localhost:8001/v1` |
-| `LLM_MODEL` | Judge model name | `Qwen/Qwen3-14B` |
-| `ANTHROPIC_API_KEY` | Anthropic API key (adversarial mode) | - |
-| `HF_TOKEN` | HuggingFace token (model push) | - |
-| `GENERATOR_MODE` | `simple` or `llm` (standard mode only) | `simple` |
+| `ANTHROPIC_API_KEY` | For adversarial designer + judge | required in adversarial mode |
+| `MAX_STEPS` | Max commands per episode | `16` |
+| `EVAL_MIN_DIFFICULTY` | Override min difficulty for eval | `0.0` |
 
 ## Project Structure
 
 ```
 kube-sre-gym/
-├── __init__.py             # Module exports
-├── models.py               # Action, Observation, State models
-├── client.py               # KubeSreGymEnv client
-├── train.py                # GRPO training (TRL + vLLM, runs on H100)
-├── pyproject.toml          # Dependencies
-├── Dockerfile              # Container image
-├── sample_app/
-│   ├── namespaces.yaml     # payments, frontend, auth, hackathon
-│   ├── base/               # Healthy manifests (deployed on reset)
-│   ├── hackathon/          # Training/eval/complex broken scenarios
-│   ├── deploy_all.sh
-│   └── cleanup.sh
-└── server/
-    ├── kube_sre_gym_environment.py  # Core environment (reset/step)
-    ├── k8s_backend.py      # K8s auth, command dispatch, reset, health checks
-    ├── k8s_commands.py     # kubectl command handlers (get/describe/logs/set/patch)
-    ├── k8s_injectors.py    # Failure injectors (oom, crashloop, image_pull, etc.)
-    ├── constants.py        # Shared constants (topology, healthy state, timeouts)
-    ├── curriculum.py       # Progressive difficulty + mastery tracking
-    ├── scenario_generator.py  # Fault scenario pool + LLM generation
-    ├── adversarial_designer.py  # LLM-designed compound incidents
-    ├── judge.py            # LLMJudge + AdversarialJudge (phase-aware)
-    ├── llm_client.py       # OpenAI/HF/Anthropic LLM wrapper
-    └── app.py              # FastAPI application
+├── train.py                # GRPO training (TRL 0.29.0 + vLLM colocate)
+├── eval.py                 # Base vs trained model comparison
+├── models.py               # Action, Observation, State dataclasses
+├── client.py               # KubeSreGymEnv sync client
+├── server/
+│   ├── kube_sre_gym_environment.py  # Core env: reset → inject → step → judge → reward
+│   ├── k8s_backend.py      # K8s auth, execute, reset, health checks
+│   ├── k8s_commands.py      # kubectl command handlers (get/describe/logs/set/patch)
+│   ├── k8s_injectors.py    # Real fault injection via K8s API
+│   ├── adversarial_designer.py  # LLM designs multi-step incidents
+│   ├── judge.py             # LLMJudge + AdversarialJudge (phase-aware SRE scoring)
+│   ├── curriculum.py        # Progressive difficulty + mastery tracking
+│   ├── scenario_generator.py  # Fault scenario pool
+│   ├── llm_client.py       # OpenAI/HF/Anthropic wrapper
+│   ├── constants.py         # Cluster topology, healthy state definitions
+│   └── app.py              # FastAPI + WebSocket server
+└── sample_app/
+    ├── namespaces.yaml      # payments, frontend, auth
+    └── base/                # Healthy deployment manifests
 ```
+
+## Key Design Decisions
+
+1. **Real cluster over simulator** — Simulators can't reproduce the timing, state transitions, and failure modes of real Kubernetes. OOM kills happen when the kernel actually runs out of memory, not when a flag is set.
+
+2. **Adversarial self-play** — The designer targets the agent's weaknesses (tracked by curriculum), creating an automatic curriculum that gets harder as the agent improves. No manual scenario authoring needed.
+
+3. **Multi-layer resolution check** — Programmatic (expected pod count + restart tracking + OOM detection) + LLM judge verification. This prevents false resolution from OOM-flapping pods or partial fixes in multi-fault scenarios.
+
+4. **No topology in prompt** — The agent receives zero information about namespaces, deployment names, or images. It must learn to discover the cluster layout via `kubectl get pods -A`, making the learned policy transferable to any cluster.
+
+5. **GRPO over PPO** — GRPO compares multiple rollouts of the same prompt, producing stable advantages without a value function. Better suited for sparse, delayed rewards (most reward comes at episode end).
+
+## Results
+
+Training Qwen3-0.6B with GRPO on H100:
+- Episodes 1-3: All failures (-2.0 reward) — model doesn't know namespace layout
+- Episodes 4-8: First successes (+3.9 to +8.1 reward) — model learns `kubectl get pods -A` and correct fix commands
+- Mean reward trends from -2.0 to +1.5 within first gradient step
+
+The agent learns to: discover namespaces, identify fault types from pod status, apply correct fixes, and verify resolution — all from reward signal alone.
