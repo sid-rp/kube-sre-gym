@@ -315,7 +315,25 @@ class KubeSreGymEnvironment(Environment):
                                and total_count > 0)
 
                 if all_healthy:
-                    break
+                    # OOM pods can appear briefly Running before crashing again.
+                    # Double-check after a short delay to catch flapping pods.
+                    time.sleep(5)
+                    health2 = self.backend.check_health()
+                    if is_adversarial:
+                        check2 = health2
+                    elif affected_ns and affected_ns in health2:
+                        check2 = {affected_ns: health2[affected_ns]}
+                    else:
+                        check2 = health2
+                    statuses2 = [s for ns_pods in check2.values() for s in ns_pods.values()]
+                    healthy2 = sum(1 for s in statuses2 if s in ("Running", "Completed"))
+                    all_healthy = (healthy2 >= expected_pods
+                                   and healthy2 == len(statuses2)
+                                   and len(statuses2) > 0)
+                    if all_healthy:
+                        break
+                    # Flapping detected — keep polling
+                    continue
                 # If pods are still starting, keep waiting (up to 60s)
                 if starting_count == 0 and poll >= 3:
                     # No pods starting and none healthy after 15s — fix didn't work
