@@ -33,7 +33,7 @@ class LLMClient:
 
     def __init__(self):
         self.backend = os.environ.get("LLM_BACKEND", "hf")
-        self.model = os.environ.get("LLM_MODEL", "Qwen/Qwen2.5-72B-Instruct")
+        self.model = os.environ.get("LLM_MODEL", "Qwen/Qwen3-14B")
 
         if self.backend == "hf":
             from huggingface_hub import InferenceClient

@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 OPENENV_URL = os.environ.get("OPENENV_URL", "http://localhost:7860")
-AGENT_MODEL = os.environ.get("AGENT_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+AGENT_MODEL = os.environ.get("AGENT_MODEL", "Qwen/Qwen3-8B")
 NUM_EPISODES = int(os.environ.get("NUM_EPISODES", "50"))
 NUM_GENERATIONS = int(os.environ.get("NUM_GENERATIONS", "4"))
 MAX_SEQ_LENGTH = 2048
@@ -241,7 +241,7 @@ def main():
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=AGENT_MODEL,
         max_seq_length=MAX_SEQ_LENGTH,
-        load_in_4bit=True,
+        dtype="bfloat16",
     )
 
     model = FastLanguageModel.get_peft_model(
