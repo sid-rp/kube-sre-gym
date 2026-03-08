@@ -21,6 +21,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+train = [
+    "trl[vllm]",
+    "peft",
+    "transformers",
+    "datasets",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=4.0.0",

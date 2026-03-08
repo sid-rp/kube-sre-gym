@@ -18,21 +18,21 @@ class LLMClient:
     Thin wrapper that picks the right backend based on env vars.
 
     Config:
-      LLM_BACKEND=hf (default) → uses HF Inference API
-      LLM_BACKEND=openai       → uses OpenAI-compatible endpoint (vLLM, local)
+      LLM_BACKEND=openai (default) → uses OpenAI-compatible endpoint (vLLM on H100)
+      LLM_BACKEND=hf              → uses HF Inference API (requires credits)
 
     HF mode env vars:
       HF_TOKEN      — HuggingFace token
       LLM_MODEL     — model ID (default: Qwen/Qwen2.5-72B-Instruct)
 
     OpenAI mode env vars:
-      LLM_BASE_URL  — endpoint (default: http://localhost:8000/v1)
+      LLM_BASE_URL  — vLLM endpoint (default: http://localhost:8001/v1)
       LLM_API_KEY   — API key (default: "local")
       LLM_MODEL     — model name
     """
 
     def __init__(self):
-        self.backend = os.environ.get("LLM_BACKEND", "hf")
+        self.backend = os.environ.get("LLM_BACKEND", "openai")
         self.model = os.environ.get("LLM_MODEL", "Qwen/Qwen3-14B")
 
         if self.backend == "hf":
@@ -45,7 +45,7 @@ class LLMClient:
         else:
             from openai import OpenAI
             self.client = OpenAI(
-                base_url=os.environ.get("LLM_BASE_URL", "http://localhost:8000/v1"),
+                base_url=os.environ.get("LLM_BASE_URL", "http://localhost:8001/v1"),
                 api_key=os.environ.get("LLM_API_KEY", "local"),
             )
             logger.info(f"LLM backend: OpenAI-compatible ({self.model})")

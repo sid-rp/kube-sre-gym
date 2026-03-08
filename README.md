@@ -15,7 +15,32 @@ tags:
 
 A Kubernetes SRE training environment where an RL agent diagnoses and fixes real GKE cluster incidents. Features curriculum-driven difficulty, LLM-based judging, and dynamic scenario generation.
 
-## Quick Start
+## Setup (H100)
+
+```bash
+# 1. Clone and install
+git clone https://huggingface.co/spaces/openenv-community/kube-sre-gym
+cd kube-sre-gym
+pip install -e ".[train]"
+
+# 2. Set env vars
+export K8S_TOKEN=<gke-token>
+export K8S_ENDPOINT=<gke-api-url>
+export K8S_CA_CERT=<base64-ca-cert>
+export HF_TOKEN=<hf-token>
+
+# 3. Start judge model (Terminal 1)
+trl vllm-serve --model Qwen/Qwen3-14B --host 0.0.0.0 --port 8001
+
+# 4. Start OpenEnv server (Terminal 2)
+LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 \
+  python -m kube_sre_gym.server.app --port 8000
+
+# 5. Run GRPO training (Terminal 3)
+python train.py --vllm-mode colocate
+```
+
+## Client Usage
 
 ```python
 from kube_sre_gym import KubeSreGymAction, KubeSreGymEnv
@@ -33,15 +58,20 @@ with KubeSreGymEnv(base_url="http://localhost:8000") as client:
 
 ## Architecture
 
+Everything runs on the H100. HF Hub is just for code + model weights.
+
 ```
-HF Space (Docker)              GKE Cluster
-┌──────────────────┐          ┌──────────────────┐
-│ OpenEnv Server   │          │ hackathon namespace│
-│                  │  Python  │                   │
-│ reset() ─────────┼──k8s────►│ deploy broken app │
-│ step(action) ────┼──client──►│ run kubectl cmd   │
-│ _score() ────────┼──────────│ return real output │
-└──────────────────┘          └──────────────────┘
+H100 (all-in-one)                              GKE Cluster
+┌──────────────────────────────────┐          ┌──────────────┐
+│ OpenEnv server  :8000            │  k8s     │ hackathon ns │
+│  reset/step/state                │──client──►│ payment-api  │
+│  Judge ──► vLLM :8001            │          │ redis        │
+│                                  │          └──────────────┘
+│ vLLM :8001  Qwen3-14B (judge)    │
+│                                  │
+│ train.py  GRPO (TRL+vLLM)       │
+│  Qwen3-8B agent, G=4            │
+└──────────────────────────────────┘
 ```
 
 ## Failure Types
@@ -63,9 +93,10 @@ HF Space (Docker)              GKE Cluster
 | `K8S_TOKEN` | Bearer token for GKE | - |
 | `K8S_ENDPOINT` | GKE API endpoint | - |
 | `K8S_CA_CERT` | Base64 CA cert | - |
-| `LLM_BACKEND` | `hf` or `openai` | `hf` |
-| `LLM_MODEL` | Model name | `Qwen/Qwen2.5-72B-Instruct` |
-| `HF_TOKEN` | HuggingFace token | - |
+| `LLM_BACKEND` | `openai` or `hf` | `openai` |
+| `LLM_BASE_URL` | vLLM judge endpoint | `http://localhost:8001/v1` |
+| `LLM_MODEL` | Judge model name | `Qwen/Qwen3-14B` |
+| `HF_TOKEN` | HuggingFace token (model push) | - |
 | `GENERATOR_MODE` | `simple` or `llm` | `simple` |
 
 ## Project Structure
@@ -77,8 +108,8 @@ kube_sre_gym/               (this repo root)
 ├── client.py               # KubeSreGymEnv client
 ├── openenv.yaml            # OpenEnv manifest
 ├── pyproject.toml          # Dependencies
-├── Dockerfile              # Container image (HF Spaces)
-├── train.py                # GRPO training script (runs on H100)
+├── Dockerfile              # Container image
+├── train.py                # GRPO training (TRL + vLLM, runs on H100)
 └── server/
     ├── __init__.py
     ├── kube_sre_gym_environment.py  # Core environment (reset/step)
