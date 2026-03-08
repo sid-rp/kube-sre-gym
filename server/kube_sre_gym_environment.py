@@ -8,6 +8,7 @@ Modes (set via GYM_MODE env var):
   adversarial  — multi-step incidents designed by external LLM judge
 """
 
+import json
 import os
 import logging
 import time
@@ -166,6 +167,7 @@ class KubeSreGymEnvironment(Environment):
     def step(self, action: KubeSreGymAction) -> KubeSreGymObservation:
         self._step_count += 1
         self._state.step_count = self._step_count
+        logger.info(f"  Step {self._step_count}/{self.max_steps}: {action.command}")
 
         output = self.backend.execute(action.command)
 
@@ -176,6 +178,10 @@ class KubeSreGymEnvironment(Environment):
         reward, feedback = self.judge.evaluate(
             action.command, output, self.scenario, self.history, persona
         )
+
+        logger.info(f"    -> reward={reward:.2f} | {feedback[:80]}")
+        if output:
+            logger.info(f"    -> output: {output[:120].replace(chr(10), ' ')}")
 
         if repeat_count > 0:
             penalty = min(0.5, repeat_count * 0.15)
@@ -225,14 +231,42 @@ class KubeSreGymEnvironment(Environment):
             if hasattr(self.scenario, "name") and self.scenario.name:
                 track_type = f"adversarial:{self.scenario.name}"
 
+            total_reward = sum(h["reward"] for h in self.history)
+            resolved = "resolved" in feedback.lower()
             self.curriculum.record(
                 failure_type=track_type,
-                success="resolved" in feedback.lower(),
+                success=resolved,
                 steps=self._step_count,
-                reward=sum(h["reward"] for h in self.history),
+                reward=total_reward,
             )
-            self._state.is_resolved = "resolved" in feedback.lower()
-            self._state.cumulative_reward = sum(h["reward"] for h in self.history)
+            self._state.is_resolved = resolved
+            self._state.cumulative_reward = total_reward
+
+            logger.info(f"  === EPISODE DONE: {'RESOLVED' if resolved else 'FAILED'} | "
+                        f"fault={track_type} | steps={self._step_count} | "
+                        f"total_reward={total_reward:.2f} | "
+                        f"tier={self.curriculum.get_tier_name()} | "
+                        f"difficulty={self.curriculum.get_difficulty():.2f} ===")
+
+            # Save episode transcript to JSONL
+            try:
+                transcript = {
+                    "episode": self.curriculum.episode_count,
+                    "fault_type": track_type,
+                    "resolved": resolved,
+                    "steps": self._step_count,
+                    "total_reward": total_reward,
+                    "difficulty": self.curriculum.get_difficulty(),
+                    "tier": self.curriculum.get_tier_name(),
+                    "alert": self.scenario.alert_message,
+                    "root_cause": self.scenario.root_cause,
+                    "history": self.history,
+                }
+                log_path = os.environ.get("EPISODE_LOG", "episode_transcripts.jsonl")
+                with open(log_path, "a") as f:
+                    f.write(json.dumps(transcript) + "\n")
+            except Exception as e:
+                logger.warning(f"Failed to save episode transcript: {e}")
 
         # Only auto-fetch cluster summary after fix attempts or on done
         # Otherwise the agent should run its own diagnostic commands
