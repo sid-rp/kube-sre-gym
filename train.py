@@ -120,7 +120,7 @@ CRITICAL: There may be 2-3 faults across DIFFERENT namespaces. You must find and
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GRPO training for K8s SRE agent")
-    parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B", help="Agent model to fine-tune")
+    parser.add_argument("--model-id", default="Qwen/Qwen3-0.6B", help="Agent model to fine-tune")
     parser.add_argument("--env-url", default="http://localhost:8000", help="OpenEnv server URL")
     parser.add_argument("--dataset-size", type=int, default=50, help="Number of training episodes")
     parser.add_argument("--max-turns", type=int, default=15, help="Max commands per episode")
@@ -521,7 +521,7 @@ def main() -> None:
         lr_scheduler_type="cosine",  # cosine decay works well with GRPO
         warmup_steps=2,
         max_grad_norm=1.0,  # standard clipping (0.1 was too conservative)
-        gradient_accumulation_steps=4,  # larger effective batch for stable GRPO
+        gradient_accumulation_steps=8,  # large effective batch for stable GRPO signal
         per_device_train_batch_size=1,
         generation_batch_size=args.num_generations,
         num_generations=args.num_generations,
