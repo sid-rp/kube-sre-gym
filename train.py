@@ -427,6 +427,8 @@ def main() -> None:
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         push_to_hub=args.push_to_hub,
+        hub_model_id=args.hub_repo if args.push_to_hub else None,
+        save_total_limit=3,  # keep last 3 checkpoints to save disk
     )
 
     # ---- Reward CSV logger ----
