@@ -268,10 +268,6 @@ class KubeSreGymEnvironment(Environment):
             action.command, output, self.scenario, self.history, persona
         )
 
-        logger.info(f"    -> reward={reward:.2f} | {feedback[:80]}")
-        if output:
-            logger.info(f"    -> output: {output[:120].replace(chr(10), ' ')}")
-
         if repeat_count > 0:
             penalty = min(0.5, repeat_count * 0.15)
             reward -= penalty
@@ -283,6 +279,11 @@ class KubeSreGymEnvironment(Environment):
         if any(p in output for p in _ERROR_PATTERNS) and reward > 0:
             reward = min(reward, -0.2)
             feedback += " Command failed."
+
+        # Log AFTER all reward adjustments so the displayed reward matches reality
+        logger.info(f"    -> reward={reward:.2f} | {feedback[:80]}")
+        if output:
+            logger.info(f"    -> output: {output[:120].replace(chr(10), ' ')}")
 
         done = False
 
