@@ -1,10 +1,8 @@
 import os
 import logging
 import time
-import yaml
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from kubernetes.stream import stream
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +76,6 @@ class K8sBackend:
         self.v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
 
-        self.manifests_dir = os.environ.get("MANIFESTS_DIR", "./sample_app")
         self.app_namespaces = ["payments", "frontend", "auth"]
 
     def execute(self, command: str) -> str:
@@ -556,12 +553,28 @@ class K8sBackend:
         if len(parts) < 2:
             return "error: resource type and name required"
         rtype, rname = parts[0], parts[1]
+        # Extract JSON patch body — may span multiple split() parts if it contains spaces
         patch_str = None
         for i, p in enumerate(parts):
             if p in ("-p", "--patch") and i + 1 < len(parts):
-                patch_str = parts[i + 1]
+                # Rejoin everything after the flag, then extract the JSON object
+                remainder = " ".join(parts[i + 1:])
+                remainder = remainder.strip().strip("'\"")
+                # Find the JSON object boundaries (handles nested braces)
+                brace_start = remainder.find("{")
+                if brace_start >= 0:
+                    depth = 0
+                    for j, ch in enumerate(remainder[brace_start:], brace_start):
+                        if ch == "{":
+                            depth += 1
+                        elif ch == "}":
+                            depth -= 1
+                            if depth == 0:
+                                patch_str = remainder[brace_start:j + 1]
+                                break
+                break
             elif p.startswith("-p="):
-                patch_str = p[3:]
+                patch_str = p[3:].strip("'\"")
         if not patch_str:
             return "error: patch body required (-p)"
         try:
@@ -652,29 +665,72 @@ class K8sBackend:
         return "Injected cascading failure: redis OOM -> payment-api errors -> frontend 502"
 
     def reset(self):
-        """Reset cluster to healthy state by reapplying manifests."""
-        import subprocess
-        for ns in self.app_namespaces:
+        """Reset cluster to healthy state by restoring each deployment's config.
+
+        Instead of deleting namespaces (destructive, slow, requires manifests),
+        we patch each deployment back to the known-good state from HEALTHY_STATE.
+        This is idempotent and works with pre-existing cluster resources.
+        """
+        from .adversarial_designer import HEALTHY_STATE
+
+        for ns, deployments in HEALTHY_STATE.items():
+            # Ensure namespace exists
             try:
-                self.v1.delete_namespace(ns)
+                self.v1.read_namespace(ns)
+            except ApiException:
+                logger.warning(f"Namespace '{ns}' not found — skipping reset for it")
+                continue
+
+            for deploy_name, spec in deployments.items():
+                try:
+                    deploy = self.apps_v1.read_namespaced_deployment(deploy_name, ns)
+                except ApiException:
+                    logger.warning(f"Deployment '{deploy_name}' not found in '{ns}' — skipping")
+                    continue
+
+                try:
+                    for c in deploy.spec.template.spec.containers:
+                        # Restore image
+                        c.image = spec["image"]
+                        # Restore memory limits
+                        if not c.resources:
+                            c.resources = client.V1ResourceRequirements()
+                        c.resources.limits = {"memory": spec["memory_limit"]}
+                        # Restore env vars
+                        c.env = [client.V1EnvVar(name=k, value=v) for k, v in spec["env"].items()]
+                        # Remove any injected bad commands
+                        c.command = None
+                        c.args = None
+
+                    # Restore replicas
+                    deploy.spec.replicas = spec["replicas"]
+
+                    self.apps_v1.replace_namespaced_deployment(deploy_name, ns, deploy)
+                    logger.info(f"Reset {deploy_name} in {ns} to healthy state")
+                except ApiException as e:
+                    logger.error(f"Failed to reset {deploy_name} in {ns}: {e.reason}")
+
+            # Clean up any resource quotas injected by scenarios
+            try:
+                quotas = self.v1.list_namespaced_resource_quota(ns)
+                for q in quotas.items:
+                    if q.metadata.name == "tight-quota":
+                        self.v1.delete_namespaced_resource_quota("tight-quota", ns)
+                        logger.info(f"Removed tight-quota from {ns}")
             except ApiException:
                 pass
-        for _ in range(60):
-            existing = [ns.metadata.name for ns in self.v1.list_namespace().items]
-            if not any(ns in existing for ns in self.app_namespaces):
-                break
-            time.sleep(2)
-        if os.path.exists(self.manifests_dir):
-            subprocess.run(["kubectl", "apply", "-f", self.manifests_dir],
-                         capture_output=True, timeout=60)
-        for _ in range(60):
+
+        # Wait for pods to stabilize
+        for _ in range(30):
             health = self.check_health()
             all_running = all(
                 s == "Running" for ns_pods in health.values() for s in ns_pods.values()
             ) if health else False
             if all_running and health:
-                break
+                logger.info("Cluster reset complete — all pods healthy")
+                return
             time.sleep(3)
+        logger.warning("Cluster reset timed out — some pods may not be healthy")
 
     def check_health(self) -> dict:
         """Return {namespace: {pod_name: status}} for all app namespaces."""
