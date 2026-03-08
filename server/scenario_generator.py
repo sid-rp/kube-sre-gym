@@ -60,6 +60,42 @@ SCENARIO_POOL = [
         correct_fix_description="Delete or increase the restrictive ResourceQuota",
         expected_diagnostic_path=["kubectl get pods -n payments", "kubectl get events -n payments"],
     ),
+    # --- Tier 2 additional: scale_zero on different deployments ---
+    ScenarioSpec(
+        failure_type="scale_zero", namespace="payments", deployment="payment-gateway",
+        params={"namespace": "payments", "deployment": "payment-gateway"},
+        root_cause="payment-gateway scaled to 0 replicas — no pods running",
+        difficulty=0.35, alert_message="CRITICAL: payment-gateway has 0 available replicas",
+        correct_fix_description="Scale payment-gateway back to 2 replicas",
+        expected_diagnostic_path=["kubectl get pods -n payments", "kubectl get deployment payment-gateway -n payments"],
+    ),
+    ScenarioSpec(
+        failure_type="scale_zero", namespace="auth", deployment="auth-service",
+        params={"namespace": "auth", "deployment": "auth-service"},
+        root_cause="auth-service scaled to 0 replicas — authentication unavailable",
+        difficulty=0.35, alert_message="CRITICAL: auth-service has 0 available replicas, login failures",
+        correct_fix_description="Scale auth-service back to 2 replicas",
+        expected_diagnostic_path=["kubectl get pods -n auth", "kubectl get deployment auth-service -n auth"],
+    ),
+    # --- Tier 2 additional: bad_config on different deployments ---
+    ScenarioSpec(
+        failure_type="bad_config", namespace="payments", deployment="payment-api",
+        params={"namespace": "payments", "deployment": "payment-api"},
+        root_cause="DB_HOST env var set to invalid host — payment-api connection errors",
+        difficulty=0.4, alert_message="CRITICAL: payment-api connection refused errors",
+        correct_fix_description="Remove or fix the DB_HOST env var",
+        expected_diagnostic_path=["kubectl get pods -n payments", "kubectl logs payment-api -n payments"],
+    ),
+    # --- Tier 2 additional: liveness_probe on different deployment ---
+    ScenarioSpec(
+        failure_type="liveness_probe", namespace="payments", deployment="payment-gateway",
+        params={"namespace": "payments", "deployment": "payment-gateway"},
+        root_cause="Liveness probe path changed to nonexistent endpoint — pods keep restarting",
+        difficulty=0.5, alert_message="WARNING: payment-gateway frequent restarts, liveness probe failing",
+        correct_fix_description="Patch liveness probe back to correct path /",
+        expected_diagnostic_path=["kubectl get pods -n payments", "kubectl describe pod payment-gateway -n payments"],
+    ),
+    # --- Tier 3 ---
     ScenarioSpec(
         failure_type="cascading_db", namespace="frontend", deployment="frontend-cache",
         params={"namespace": "frontend", "deployment": "frontend-cache"},

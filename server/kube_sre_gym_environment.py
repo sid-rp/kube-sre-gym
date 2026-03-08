@@ -178,7 +178,8 @@ class KubeSreGymEnvironment(Environment):
         affected_ns = self.scenario.namespace if self.scenario else None
 
         # resource_quota doesn't crash existing pods, just blocks new ones
-        if fault_type == "resource_quota":
+        # scale_zero removes all pods — check for 0 pods instead of unhealthy
+        if fault_type in ("resource_quota", "scale_zero"):
             time.sleep(3)
             return
 

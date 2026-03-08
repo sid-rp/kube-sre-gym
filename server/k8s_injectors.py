@@ -46,6 +46,7 @@ class FailureInjector:
             "liveness_probe": self._inject_liveness_probe,
             "resource_quota": self._inject_resource_quota,
             "cascading_db": self._inject_cascading,
+            "scale_zero": self._inject_scale_zero,
         }
         fn = injectors.get(failure_type)
         if not fn:
@@ -80,7 +81,12 @@ class FailureInjector:
             return f"Error: {e.reason}"
 
     def _inject_bad_config(self, ns: str, deploy: str) -> str:
-        self.cmd.set_env([f"deployment/{deploy}", "DB_HOST=wrong-host.invalid.local"], ns)
+        # payment-worker checks DATABASE_URL, not DB_HOST
+        if deploy == "payment-worker":
+            self.cmd.set_env([f"deployment/{deploy}",
+                              "DATABASE_URL=postgres://wrong-host.invalid:5432/payments"], ns)
+        else:
+            self.cmd.set_env([f"deployment/{deploy}", "DB_HOST=wrong-host.invalid.local"], ns)
         time.sleep(INJECT_WAIT_DEFAULT)
         return f"Injected bad config on {deploy} in {ns}"
 
@@ -116,6 +122,16 @@ class FailureInjector:
         try:
             self.v1.create_namespaced_resource_quota(ns, quota)
             return f"Injected tight ResourceQuota in {ns}"
+        except ApiException as e:
+            return f"Error: {e.reason}"
+
+    def _inject_scale_zero(self, ns: str, deploy: str) -> str:
+        try:
+            d = self.apps_v1.read_namespaced_deployment(deploy, ns)
+            d.spec.replicas = 0
+            self.apps_v1.replace_namespaced_deployment(deploy, ns, d)
+            time.sleep(5)
+            return f"Injected scale-to-zero on {deploy} in {ns}"
         except ApiException as e:
             return f"Error: {e.reason}"
 

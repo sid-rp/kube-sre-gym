@@ -27,6 +27,7 @@ INJECTABLE_FAILURES = {
     "liveness_probe": "Sets liveness probe to wrong path — pod restart loop",
     "resource_quota": "Applies tight ResourceQuota — new pods blocked from scheduling",
     "cascading_db": "OOMs redis — payment-api loses backend — frontend 502s",
+    "scale_zero": "Scales deployment to 0 replicas — no pods running",
 }
 
 # ---- Healthy steady-state for each deployment ----

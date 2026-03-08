@@ -27,8 +27,9 @@ FAULT_TIERS = {
     "crashloop":       {"tier": 1, "min_difficulty": 0.0},
     "image_pull":      {"tier": 1, "min_difficulty": 0.0},
     # Tier 2 (medium, difficulty 0.3-0.6): requires investigation
-    "bad_config":      {"tier": 2, "min_difficulty": 0.3},
-    "liveness_probe":  {"tier": 2, "min_difficulty": 0.3},
+    "bad_config":       {"tier": 2, "min_difficulty": 0.3},
+    "liveness_probe":   {"tier": 2, "min_difficulty": 0.3},
+    "scale_zero":       {"tier": 2, "min_difficulty": 0.3},
     # Tier 3 (hard, difficulty 0.6-0.8): multi-step diagnosis
     "resource_quota":  {"tier": 3, "min_difficulty": 0.6},
     "cascading_db":    {"tier": 3, "min_difficulty": 0.6},
@@ -92,14 +93,27 @@ class CurriculumController:
                 )
 
     def _maybe_advance_tier(self):
-        """Advance to the next difficulty tier if the agent is ready."""
+        """Advance to the next difficulty tier if the agent is ready.
+
+        Fast-track: if success rate >= 90% after at least 3 episodes, skip
+        the min_episodes requirement. Agents that ace easy tiers shouldn't
+        be held back.
+        """
         if self._tier_index >= len(DIFFICULTY_TIERS) - 1:
             return  # already at max tier
         tier = DIFFICULTY_TIERS[self._tier_index]
-        if self._tier_episodes < tier["min_episodes"]:
-            return  # not enough episodes in this tier yet
         recent_rate = self._recent_success_rate()
+
+        # Fast-track: 90%+ success after 3 episodes → advance immediately
+        fast_track = (self._tier_episodes >= 3 and recent_rate >= 0.9)
+
+        if not fast_track and self._tier_episodes < tier["min_episodes"]:
+            return  # not enough episodes in this tier yet
+
         if recent_rate >= tier["advance_rate"]:
+            logger.info(f"Curriculum: advancing from {tier['name']} "
+                        f"(rate={recent_rate:.0%}, episodes={self._tier_episodes}"
+                        f"{', FAST-TRACK' if fast_track else ''})")
             self._tier_index += 1
             self._tier_episodes = 0
 
@@ -193,19 +207,35 @@ class CurriculumController:
         unlocked = self.get_unlocked_fault_types()
         weak_spots = self.get_weak_spots()
 
-        # Priority 1: target weak spots that are unlocked
-        weak_and_unlocked = [ft for ft in weak_spots if ft in unlocked and ft != "adversarial"]
-        if weak_and_unlocked:
-            return random.choice(weak_and_unlocked)
+        # Count how many times each fault type has been used
+        ft_counts = {ft: len(results) for ft, results in self.history.items()}
 
-        # Priority 2: untried fault types that are now unlocked
+        # Max repeats: simple (tier 1) = 2x, medium+ = 3x before all unlocked are tried
         tried = set(self.history.keys())
         untried = [ft for ft in unlocked if ft not in tried and ft != "adversarial"]
+
+        def _over_limit(ft):
+            tier = FAULT_TIERS.get(ft, {}).get("tier", 1)
+            limit = 2 if tier == 1 else 3
+            return ft_counts.get(ft, 0) >= limit and untried
+
+        # Priority 1: untried fault types that are now unlocked — explore first
         if untried:
             return random.choice(untried)
 
+        # Priority 2: target weak spots that are unlocked and not over-repeated
+        weak_and_unlocked = [ft for ft in weak_spots
+                             if ft in unlocked and ft != "adversarial"
+                             and not _over_limit(ft)]
+        if weak_and_unlocked:
+            return random.choice(weak_and_unlocked)
+
         # Priority 3: sample from unlocked, weighting non-graduated higher
-        candidates = [ft for ft in unlocked if ft != "adversarial"]
+        candidates = [ft for ft in unlocked
+                      if ft != "adversarial" and not _over_limit(ft)]
+        if not candidates:
+            # All over limit — allow any unlocked
+            candidates = [ft for ft in unlocked if ft != "adversarial"]
         if not candidates:
             return "oom_kill"  # fallback
 
