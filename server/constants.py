@@ -53,11 +53,15 @@ HEALTHY_STATE = {
             "env": {"DATABASE_URL": "postgres://payments_user:payments_pass@payment-db.payments.svc.cluster.local:5432/payments"},
             "memory_limit": "64Mi", "replicas": 1,
             "liveness_probe": None,
+            "command": ["/bin/sh", "-c"],
+            "args": ['if [ -z "$DATABASE_URL" ]; then\n  echo "FATAL: DATABASE_URL not set"\n  exit 1\nfi\necho "Worker connected to $DATABASE_URL, processing payments..."\nwhile true; do sleep 60; echo "heartbeat"; done\n'],
         },
         "payment-api": {
             "container_name": "payment-api", "image": "python:3.11-slim",
             "env": {}, "memory_limit": "256Mi", "replicas": 1,
             "liveness_probe": {"path": "/", "port": 8080},
+            "command": ["python", "-c"],
+            "args": ['import http.server, time\nprint("payment-api: Ready, serving on port 8080")\nserver = http.server.HTTPServer((\'\', 8080), http.server.SimpleHTTPRequestHandler)\nserver.serve_forever()\n'],
         },
     },
     "frontend": {

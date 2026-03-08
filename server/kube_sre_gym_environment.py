@@ -218,6 +218,13 @@ class KubeSreGymEnvironment(Environment):
         else:
             exec_cmd = raw_cmd
 
+        # Detect mutation commands as implicit fixes even without "fix:" prefix
+        # This ensures the post-fix health check runs when the agent applies a fix
+        _MUTATION_PATTERNS = ("kubectl set ", "kubectl patch ", "kubectl scale ",
+                              "kubectl rollout restart")
+        if not is_fix and any(exec_cmd.startswith(p) for p in _MUTATION_PATTERNS):
+            is_fix = True
+
         # Execute the kubectl command (if any remains after stripping prefix)
         if exec_cmd and exec_cmd.startswith("kubectl"):
             output = self.backend.execute(exec_cmd)

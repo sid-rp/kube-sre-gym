@@ -397,10 +397,32 @@ class CommandHandler:
             return f"Error: {e.reason}"
 
     def _cmd_rollout(self, parts: list[str], ns: str | None) -> str:
-        if parts and parts[0] == "restart" and len(parts) > 1:
+        if not parts:
+            return "error: subcommand required (restart, status)"
+        sub = parts[0]
+        if sub == "restart" and len(parts) > 1:
             deploy_name = parts[1].replace("deployment/", "")
             return self.rollout_restart(deploy_name, ns or DEFAULT_NAMESPACE)
+        elif sub == "status" and len(parts) > 1:
+            deploy_name = parts[1].replace("deployment/", "")
+            return self._rollout_status(deploy_name, ns or DEFAULT_NAMESPACE)
         return "error: unsupported rollout command"
+
+    def _rollout_status(self, deploy_name: str, ns: str) -> str:
+        """Check rollout status of a deployment."""
+        try:
+            d = self.apps_v1.read_namespaced_deployment(deploy_name, ns)
+            desired = d.spec.replicas or 0
+            updated = d.status.updated_replicas or 0
+            available = d.status.available_replicas or 0
+            ready = d.status.ready_replicas or 0
+            if ready == desired and updated == desired and available == desired:
+                return f"deployment \"{deploy_name}\" successfully rolled out"
+            return (f"Waiting for deployment \"{deploy_name}\" rollout to finish: "
+                    f"{updated} out of {desired} new replicas have been updated, "
+                    f"{available} available, {ready} ready...")
+        except ApiException as e:
+            return f"Error: {e.reason}"
 
     def set_resources(self, parts: list[str], ns: str) -> str:
         """Set resource limits on a deployment. Used by both agent commands and injectors."""

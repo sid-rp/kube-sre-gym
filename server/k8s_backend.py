@@ -155,8 +155,8 @@ class K8sBackend:
                         c.resources.limits = {"memory": spec["memory_limit"]}
                         c.env = [client.V1EnvVar(name=k, value=v)
                                  for k, v in spec["env"].items()]
-                        c.command = None
-                        c.args = None
+                        c.command = spec.get("command")  # None if not in HEALTHY_STATE
+                        c.args = spec.get("args")        # None if not in HEALTHY_STATE
                         # Restore liveness probe from HEALTHY_STATE
                         if probe_spec:
                             c.liveness_probe = client.V1Probe(
