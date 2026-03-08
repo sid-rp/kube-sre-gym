@@ -23,8 +23,8 @@ dependencies = [
 
 [project.optional-dependencies]
 train = [
-    "trl[vllm]==0.29.0",
-    "vllm==0.11.2",
+    "trl[vllm]>=0.30.0",
+    "vllm>=0.11.2",
     "torch>=2.8.0,<2.10.0",
     "peft",
     "transformers",
