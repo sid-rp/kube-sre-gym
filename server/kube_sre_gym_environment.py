@@ -243,7 +243,7 @@ class KubeSreGymEnvironment(Environment):
 
         if is_fix:
             # Allow rollout to progress before judging health (set/rollout/patch are async)
-            for _ in range(3):
+            for _ in range(6):
                 time.sleep(5)
                 health = self.backend.check_health()
                 healthy_count = sum(
