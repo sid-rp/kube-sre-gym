@@ -262,6 +262,7 @@ class KubeSreGymEnvironment(Environment):
 
         # Penalize repeated commands — escalating penalty + circuit breaker at 3x
         repeat_count = sum(1 for h in self.history if h["command"] == action.command)
+        persona = self.curriculum.get_judge_persona()
 
         if repeat_count >= 2:
             # Circuit breaker: block after 2 repeats, override output with hint
@@ -270,7 +271,6 @@ class KubeSreGymEnvironment(Environment):
             reward = -0.5
             feedback = "Command blocked — repeated too many times."
         else:
-            persona = self.curriculum.get_judge_persona()
             reward, feedback = self.judge.evaluate(
                 action.command, output, self.scenario, self.history, persona
             )

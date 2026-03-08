@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Help PyTorch reuse fragmented GPU memory (critical for TRL+vLLM colocate on 80GB)
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # Silence TRL experimental warning for rollout_func
 os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
@@ -40,21 +40,17 @@ from peft import LoraConfig
 from trl import GRPOConfig, GRPOTrainer
 from trl.experimental.openenv import generate_rollout_completions
 
+# Requires: pip install -e ".[train]"  (from repo root)
+try:
+    from kube_sre_gym import KubeSreGymEnv, KubeSreGymAction
+except ImportError:
+    from . import KubeSreGymEnv, KubeSreGymAction
+
+
 # ---- TRL 0.29.0 / vLLM 0.11.x compatibility ----
 # TRL 0.29.0 expects vLLM logprobs as list-of-lists (top-k per token),
 # but vLLM 0.11.x returns plain floats. Patch until TRL releases a fix.
 # See: https://github.com/huggingface/trl/issues/4159
-_orig_gen = GRPOTrainer._generate_single_turn
-
-def _compat_generate_single_turn(self, prompts):
-    prompt_ids, completion_ids, logprobs, extra = _orig_gen(self, prompts)
-    return prompt_ids, completion_ids, logprobs, extra
-
-# The issue is in the line AFTER vllm_generation.generate() returns:
-#   logprobs = [[lp[0] for lp in seq] for seq in logprobs]
-# When vLLM 0.11.x already returns floats, lp[0] fails.
-# We patch vllm_generation.generate to wrap floats in lists.
-import trl.trainer.grpo_trainer as _grpo_mod
 
 _orig_vllm_gen = None
 
@@ -75,17 +71,22 @@ def _patch_vllm_generate(trainer):
 
     trainer.vllm_generation.generate = _wrapped_generate
 
-# Patch trainer.train() to apply the fix before first generation
-_orig_train = GRPOTrainer.train
+def patch_trl_vllm_compat():
+    """Apply TRL/vLLM compatibility patches. Call before trainer.train()."""
+    _orig_train = GRPOTrainer.train
 
-def _patched_train(self, *args, **kwargs):
-    _patch_vllm_generate(self)
-    return _orig_train(self, *args, **kwargs)
+    def _patched_train(self, *args, **kwargs):
+        _patch_vllm_generate(self)
+        return _orig_train(self, *args, **kwargs)
 
-GRPOTrainer.train = _patched_train
+    GRPOTrainer.train = _patched_train
 
-# Requires: pip install -e ".[train]"  (from repo root)
-from kube_sre_gym import KubeSreGymEnv, KubeSreGymAction
+# Auto-apply patches when running as script
+if __name__ != "__main__":
+    # Module import — patches available but not auto-applied
+    pass
+else:
+    patch_trl_vllm_compat()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -486,6 +487,7 @@ def plot_rewards(csv_path: Path, out_path: Path = None):
 # ============================================================
 
 def main() -> None:
+    patch_trl_vllm_compat()
     args = parse_args()
 
     logger.info("=" * 60)
