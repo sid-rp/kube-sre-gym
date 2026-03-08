@@ -464,8 +464,8 @@ def plot_comparison(base_results: list[dict], trained_results: list[dict], out_p
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate K8s SRE agent: base vs trained")
-    parser.add_argument("--base-model", default="Qwen/Qwen2.5-1.5B",
-                        help="Base model name/path (default: Qwen/Qwen2.5-1.5B)")
+    parser.add_argument("--base-model", default="Qwen/Qwen3-1.7B",
+                        help="Base model name/path (default: Qwen/Qwen3-1.7B)")
     parser.add_argument("--trained-model", default=None,
                         help="Path to trained LoRA checkpoint dir (e.g. outputs/.../checkpoint-8)")
     parser.add_argument("--env-url", default="http://localhost:8000",

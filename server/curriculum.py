@@ -17,6 +17,7 @@ Key design choice: clean state + ONE injected fault per episode.
 
 from collections import defaultdict
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,17 @@ class CurriculumController:
         self._tier_index = 0
         self._tier_episodes = 0  # episodes spent in current tier
         self._graduated = set()                # fault types the agent has mastered
+
+        # Allow forcing minimum difficulty for eval (skips warmup tiers)
+        self._min_difficulty = float(os.environ.get("EVAL_MIN_DIFFICULTY", "0.0"))
+        if self._min_difficulty > 0:
+            # Jump to the appropriate tier
+            for i, tier in enumerate(DIFFICULTY_TIERS):
+                if tier["max_diff"] >= self._min_difficulty:
+                    self._tier_index = i
+                    break
+            logger.info(f"Curriculum: forced min_difficulty={self._min_difficulty}, "
+                        f"starting at tier={self.get_tier_name()}")
 
     def record(self, failure_type: str, success: bool, steps: int, reward: float):
         """Record episode outcome and check for mastery graduation."""
@@ -154,15 +166,16 @@ class CurriculumController:
         by the tier's max. This prevents sudden jumps.
         """
         tier = DIFFICULTY_TIERS[self._tier_index]
-        if self.episode_count < 3:
-            return 0.15  # first few episodes are always easy
+        if self.episode_count < 3 and self._min_difficulty == 0:
+            return 0.15  # first few episodes are always easy (unless forced)
         rate = self._recent_success_rate()
         # Scale within the tier: low success = tier floor, high success = tier ceiling
         if self._tier_index == 0:
             tier_floor = 0.1
         else:
             tier_floor = DIFFICULTY_TIERS[self._tier_index - 1]["max_diff"]
-        return min(tier["max_diff"], tier_floor + rate * (tier["max_diff"] - tier_floor))
+        natural = min(tier["max_diff"], tier_floor + rate * (tier["max_diff"] - tier_floor))
+        return max(natural, self._min_difficulty)
 
     def get_tier_name(self) -> str:
         return DIFFICULTY_TIERS[self._tier_index]["name"]
