@@ -28,7 +28,7 @@ Use the environment:
 ```python
 from kube_sre_gym import KubeSreGymAction, KubeSreGymEnv
 
-with KubeSreGymEnv(base_url="http://localhost:8000").sync() as client:
+with KubeSreGymEnv(base_url="http://localhost:8000") as client:
     result = client.reset()
     print(result.observation.command_output)
 

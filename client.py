@@ -14,8 +14,10 @@ class KubeSreGymEnv(
     """
     Client for the K8s SRE Gym Environment.
 
+    OpenEnv v0.2.1 uses sync WebSocket calls — no .sync() needed.
+
     Example:
-        >>> with KubeSreGymEnv(base_url="http://localhost:8000").sync() as client:
+        >>> with KubeSreGymEnv(base_url="http://localhost:8000") as client:
         ...     result = client.reset()
         ...     print(result.observation.command_output)
         ...     result = client.step(KubeSreGymAction(command="kubectl get pods -A"))

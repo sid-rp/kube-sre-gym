@@ -265,8 +265,8 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
     tokenizer.pad_token = tokenizer.eos_token
 
-    # ---- Connect to OpenEnv server (sync wrapper — rollout_func is not async) ----
-    env = KubeSreGymEnv(base_url=args.env_url).sync()
+    # ---- Connect to OpenEnv server ----
+    env = KubeSreGymEnv(base_url=args.env_url)
 
     # ---- Dataset (each entry triggers one episode) ----
     dataset_prompt = "Diagnose and fix this Kubernetes incident."
