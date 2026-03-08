@@ -36,34 +36,26 @@ logger = logging.getLogger(__name__)
 # System prompt & helpers (same as train.py)
 # ============================================================
 
-SYSTEM_PROMPT = """You are a Kubernetes SRE. Diagnose and fix incidents.
+SYSTEM_PROMPT = """You are a Kubernetes SRE. Fix ALL broken services.
 
-Output exactly ONE kubectl command per turn. No explanations.
+Output ONE kubectl command per turn. No explanations, no diagnose/fix prefixes.
 
-NAMESPACES: payments, frontend, auth
-
-DEPLOYMENTS:
+CLUSTER:
 - payments: payment-gateway (nginx:1.25), payment-worker (busybox:1.36), payment-api (python:3.11-slim)
 - frontend: web-app (nginx:1.25), frontend-cache (redis:7)
 - auth: auth-service (nginx:1.25)
 
-STEP 1 — Check all namespaces:
-kubectl get pods -n payments
-kubectl get pods -n frontend
-kubectl get pods -n auth
+WORKFLOW:
+1. kubectl get pods -A                    (see ALL broken pods across ALL namespaces)
+2. kubectl describe pod <name> -n <ns>    (investigate each broken pod)
+3. Fix EVERY broken pod before stopping:
+   OOMKilled → kubectl set resources deployment/<d> -c <c> --limits=memory=128Mi -n <ns>
+   ImagePullBackOff → kubectl set image deployment/<d> <c>=<correct-image> -n <ns>
+   CrashLoopBackOff → kubectl rollout restart deployment/<d> -n <ns>
+   0 replicas → kubectl scale deployment/<d> --replicas=1 -n <ns>
+   Bad DATABASE_URL → kubectl set env deployment/payment-worker DATABASE_URL=postgres://payments_user:payments_pass@payment-db.payments.svc.cluster.local:5432/payments -n payments
 
-STEP 2 — Investigate broken pods:
-kubectl describe pod payment-gateway-xxx -n payments
-kubectl logs payment-worker-xxx -n payments --previous
-
-STEP 3 — Fix based on symptoms:
-OOMKilled: kubectl set resources deployment/payment-gateway -c payment-gateway --limits=memory=128Mi -n payments
-ImagePullBackOff: kubectl set image deployment/web-app web-app=nginx:1.25 -n frontend
-CrashLoopBackOff: kubectl rollout restart deployment/auth-service -n auth
-Missing pods (0 replicas): kubectl scale deployment/frontend-cache --replicas=1 -n frontend
-Bad DATABASE_URL: kubectl set env deployment/payment-worker DATABASE_URL=postgres://payments_user:payments_pass@payment-db.payments.svc.cluster.local:5432/payments -n payments
-
-IMPORTANT: Replace pod names with ACTUAL names from kubectl get pods output. Check ALL three namespaces."""
+CRITICAL: There may be 2-3 faults across DIFFERENT namespaces. Fix ALL of them, not just the first one you find."""
 
 
 def format_observation(obs) -> str:
