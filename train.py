@@ -89,6 +89,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha (typically 2x rank)")
     parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout")
+    parser.add_argument("--report-to", default="none", choices=("tensorboard", "wandb", "none"),
+                        help="Logging backend for reward curves (default: none, uses CSV instead)")
+    parser.add_argument("--reward-log", default="reward_log.csv",
+                        help="CSV file for per-episode reward logging")
     return parser.parse_args()
 
 
@@ -317,6 +321,61 @@ def reward_fix(completions: list[str], **kwargs) -> list[float]:
 
 
 # ============================================================
+# Reward visualization
+# ============================================================
+
+def plot_rewards(csv_path: Path, out_path: Path = None):
+    """Plot reward curves from the CSV log. Works without tensorboard."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    episodes, totals, diags, fixes = [], [], [], []
+    with open(csv_path) as f:
+        reader = __import__("csv").reader(f)
+        next(reader)  # skip header
+        for row in reader:
+            episodes.append(int(row[0]))
+            totals.append(float(row[1]))
+            diags.append(float(row[2]))
+            fixes.append(float(row[3]))
+
+    if not episodes:
+        logger.warning("No episodes to plot")
+        return
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+
+    # Rolling average
+    window = min(10, len(episodes))
+    def rolling_avg(vals):
+        return [sum(vals[max(0,i-window):i+1]) / min(i+1, window) for i in range(len(vals))]
+
+    # Total reward
+    ax1.plot(episodes, totals, alpha=0.3, color="blue", label="Per episode")
+    ax1.plot(episodes, rolling_avg(totals), color="blue", linewidth=2, label=f"Rolling avg ({window})")
+    ax1.set_ylabel("Total Reward")
+    ax1.set_title("K8s SRE Agent — GRPO Training Rewards")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    ax1.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
+
+    # Diagnosis vs Fix
+    ax2.plot(episodes, rolling_avg(diags), color="orange", linewidth=2, label="Diagnosis (rolling)")
+    ax2.plot(episodes, rolling_avg(fixes), color="green", linewidth=2, label="Fix (rolling)")
+    ax2.set_xlabel("Episode")
+    ax2.set_ylabel("Reward")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    save_path = out_path or csv_path.with_suffix(".png")
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+    logger.info(f"Reward plot saved to {save_path}")
+
+
+# ============================================================
 # Main
 # ============================================================
 
@@ -364,11 +423,30 @@ def main() -> None:
         save_strategy="steps",
         save_steps=args.save_steps,
         temperature=args.temperature,
-        report_to="none",
+        report_to=args.report_to,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         push_to_hub=args.push_to_hub,
     )
+
+    # ---- Reward CSV logger ----
+    import csv
+    reward_log_path = output_dir / args.reward_log
+    output_dir.mkdir(parents=True, exist_ok=True)
+    episode_counter = [0]  # mutable counter for closure
+
+    with open(reward_log_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["episode", "total_reward", "diagnosis_reward", "fix_reward", "timestamp"])
+
+    def _log_episode(total_r: float, diag_r: float, fix_r: float):
+        episode_counter[0] += 1
+        with open(reward_log_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([episode_counter[0], total_r, diag_r, fix_r,
+                             datetime.now().isoformat()])
+        logger.info(f"Episode {episode_counter[0]}: reward={total_r:.2f} "
+                    f"(diag={diag_r:.2f}, fix={fix_r:.2f})")
 
     # ---- Rollout function (called by GRPOTrainer each step) ----
     def rollout_func(prompts: list[str], trainer: GRPOTrainer) -> dict[str, list]:
@@ -393,6 +471,7 @@ def main() -> None:
             total_rewards.append(episode["total_reward"])
             diagnosis_rewards.append(episode["diagnosis_reward"])
             fix_rewards.append(episode["fix_reward"])
+            _log_episode(episode["total_reward"], episode["diagnosis_reward"], episode["fix_reward"])
 
         return {
             "prompt_ids": episode_prompt_ids,
@@ -440,10 +519,17 @@ def main() -> None:
     # ---- Save ----
     trainer.save_model(str(output_dir))
     logger.info(f"Model saved to {output_dir}")
+    logger.info(f"Reward log: {reward_log_path}")
 
     if args.push_to_hub and args.hub_repo:
         trainer.push_to_hub()
         logger.info(f"Model pushed to https://huggingface.co/{args.hub_repo}")
+
+    # ---- Plot rewards ----
+    try:
+        plot_rewards(reward_log_path, output_dir / "reward_plot.png")
+    except Exception as e:
+        logger.warning(f"Could not generate reward plot: {e}")
 
     logger.info("Done!")
 
