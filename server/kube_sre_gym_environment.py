@@ -50,31 +50,48 @@ class KubeSreGymEnvironment(Environment):
     SUPPORTS_CONCURRENT_SESSIONS: bool = False
 
     def __init__(self):
-        llm = LLMClient()
-        self.backend = K8sBackend()
-        self.curriculum = CurriculumController()
-        self.mode = os.environ.get("GYM_MODE", "standard")
+        try:
+            logger.info("Initializing KubeSreGymEnvironment...")
+            llm = LLMClient()
+            logger.info("LLMClient initialized")
+            self.backend = K8sBackend()
+            logger.info("K8sBackend initialized")
+            self.curriculum = CurriculumController()
+            self.mode = os.environ.get("GYM_MODE", "standard")
 
-        self.scenario = None
-        self._step_count = 0
-        self.max_steps = int(os.environ.get("MAX_STEPS", str(MAX_STEPS)))
-        self.history = []
-        self._state = KubeSreGymState(episode_id=str(uuid4()), step_count=0)
+            self.scenario = None
+            self._step_count = 0
+            self.max_steps = int(os.environ.get("MAX_STEPS", str(MAX_STEPS)))
+            self.history = []
+            self._state = KubeSreGymState(episode_id=str(uuid4()), step_count=0)
 
-        # Always initialize both paths — curriculum may switch mid-training
-        self.designer = AdversarialDesigner(llm, self.backend, max_steps=self.max_steps)
-        self.generator = ScenarioGenerator(llm, mode=os.environ.get("GENERATOR_MODE", "simple"))
+            # Always initialize both paths — curriculum may switch mid-training
+            self.designer = AdversarialDesigner(llm, self.backend, max_steps=self.max_steps)
+            self.generator = ScenarioGenerator(llm, mode=os.environ.get("GENERATOR_MODE", "simple"))
 
-        if self.mode == "adversarial":
-            self.judge = AdversarialJudge(llm)
-            logger.info("GYM_MODE=adversarial — LLM designs multi-step incidents")
-        else:
-            self.judge = LLMJudge(llm)
-            logger.info("GYM_MODE=standard — curriculum-driven single-fault injection")
+            if self.mode == "adversarial":
+                self.judge = AdversarialJudge(llm)
+                logger.info("GYM_MODE=adversarial — LLM designs multi-step incidents")
+            else:
+                self.judge = LLMJudge(llm)
+                logger.info("GYM_MODE=standard — curriculum-driven single-fault injection")
+            logger.info("KubeSreGymEnvironment initialized successfully")
+        except Exception as e:
+            logger.error(f"FATAL: KubeSreGymEnvironment.__init__ failed: {e}", exc_info=True)
+            raise
 
     def reset(self) -> KubeSreGymObservation:
+        logger.info("reset() called — resetting cluster...")
+        try:
+            return self._do_reset()
+        except Exception as e:
+            logger.error(f"FATAL: reset() failed: {e}", exc_info=True)
+            raise
+
+    def _do_reset(self) -> KubeSreGymObservation:
         # Step 1: Deploy clean healthy cluster (base manifests only)
         self.backend.reset()
+        logger.info("Cluster reset complete")
 
         skill_profile = self.curriculum.get_skill_profile()
         difficulty = self.curriculum.get_difficulty()

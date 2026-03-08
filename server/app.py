@@ -22,6 +22,10 @@ except ImportError:
     from models import KubeSreGymAction, KubeSreGymObservation
     from server.kube_sre_gym_environment import KubeSreGymEnvironment
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 app = create_app(
     KubeSreGymEnvironment,
     KubeSreGymAction,
@@ -31,11 +35,28 @@ app = create_app(
 )
 
 
+@app.get("/healthz")
+async def healthz():
+    """Quick health check — tests if environment can be created."""
+    try:
+        env = KubeSreGymEnvironment()
+        health = env.backend.check_health()
+        return {"status": "ok", "cluster_health": health}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
 def main(host: str = "0.0.0.0", port: int = 8000):
     """Entry point for `uv run server` and direct execution."""
     import argparse
     import os
     import uvicorn
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
 
     parser = argparse.ArgumentParser(description="Kube SRE Gym server")
     parser.add_argument("--port", type=int, default=port)

@@ -63,11 +63,14 @@ class K8sBackend:
 
         if endpoint and ca_cert_b64 and token:
             _load_token_auth(endpoint, ca_cert_b64, token)
+            logger.info(f"K8s auth: token-based ({endpoint})")
         else:
             try:
                 config.load_incluster_config()
+                logger.info("K8s auth: in-cluster")
             except config.ConfigException:
                 config.load_kube_config()
+                logger.info("K8s auth: kubeconfig")
 
         self.v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
