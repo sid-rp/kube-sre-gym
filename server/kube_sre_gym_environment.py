@@ -277,6 +277,13 @@ class KubeSreGymEnvironment(Environment):
             reward -= penalty
             feedback += f" Repeated command ({repeat_count + 1}x)."
 
+        # Override judge leniency: commands that fail should not get positive rewards.
+        # The judge often gives +0.4 for "good syntax" even when output is "Error: Not Found".
+        _ERROR_PATTERNS = ("Error: Not Found", "Error from server", "error:", "No resources found")
+        if any(p in output for p in _ERROR_PATTERNS) and reward > 0:
+            reward = min(reward, -0.2)
+            feedback += " Command failed."
+
         done = False
 
         if is_fix:
@@ -370,7 +377,10 @@ class KubeSreGymEnvironment(Environment):
 
         if self._step_count >= self.max_steps:
             done = True
-            reward -= 1.0  # significant timeout penalty
+            # Wipe out accumulated per-step rewards — failed episode should be net negative.
+            # This ensures GRPO gets a clear negative signal for unresolved incidents.
+            raw_sum = sum(h["reward"] for h in self.history) + reward
+            reward -= raw_sum + 2.0  # net total will be -2.0
             feedback = "Timeout -- incident remains unresolved."
 
         self.history.append({
