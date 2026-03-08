@@ -136,7 +136,7 @@ After applying a fix, STOP. Do not repeat the fix or run more commands."""
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GRPO training for K8s SRE agent")
-    parser.add_argument("--model-id", default="Qwen/Qwen3-8B", help="Agent model to fine-tune")
+    parser.add_argument("--model-id", default="Qwen/Qwen3-1.5B", help="Agent model to fine-tune")
     parser.add_argument("--env-url", default="http://localhost:8000", help="OpenEnv server URL")
     parser.add_argument("--dataset-size", type=int, default=50, help="Number of training episodes")
     parser.add_argument("--max-turns", type=int, default=15, help="Max commands per episode")
