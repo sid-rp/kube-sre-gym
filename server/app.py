@@ -32,14 +32,35 @@ app = create_app(
 
 
 def main(host: str = "0.0.0.0", port: int = 8000):
-    """Entry point for direct execution via uv run or python -m."""
+    """Entry point for `uv run server` and direct execution."""
+    import argparse
+    import os
     import uvicorn
-    uvicorn.run(app, host=host, port=port)
+
+    parser = argparse.ArgumentParser(description="Kube SRE Gym server")
+    parser.add_argument("--port", type=int, default=port)
+    parser.add_argument("--host", default=host)
+    parser.add_argument("--gym-mode", choices=("standard", "adversarial"), default=None,
+                        help="Override GYM_MODE env var")
+    parser.add_argument("--llm-backend", choices=("openai", "hf", "anthropic"), default=None,
+                        help="Override LLM_BACKEND env var")
+    parser.add_argument("--llm-model", default=None,
+                        help="Override LLM_MODEL env var (e.g. claude-sonnet-4-20250514)")
+    parser.add_argument("--anthropic-api-key", default=None,
+                        help="Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
+    args = parser.parse_args()
+
+    if args.gym_mode:
+        os.environ["GYM_MODE"] = args.gym_mode
+    if args.llm_backend:
+        os.environ["LLM_BACKEND"] = args.llm_backend
+    if args.llm_model:
+        os.environ["LLM_MODEL"] = args.llm_model
+    if args.anthropic_api_key:
+        os.environ["ANTHROPIC_API_KEY"] = args.anthropic_api_key
+
+    uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    main(port=args.port)
+    main()

@@ -2,6 +2,10 @@
 Kube SRE Gym Environment Implementation.
 
 Agent diagnoses and fixes real GKE incidents with curriculum-driven difficulty.
+
+Modes (set via GYM_MODE env var):
+  standard     — single-fault scenarios from pool or LLM generator (default)
+  adversarial  — multi-step incidents designed by external LLM judge
 """
 
 import os
@@ -19,7 +23,8 @@ from .llm_client import LLMClient
 from .k8s_backend import K8sBackend
 from .scenario_generator import ScenarioGenerator
 from .curriculum import CurriculumController
-from .judge import LLMJudge
+from .judge import LLMJudge, AdversarialJudge
+from .adversarial_designer import AdversarialDesigner
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +34,11 @@ class KubeSreGymEnvironment(Environment):
     K8s SRE OpenEnv Environment — agent diagnoses and fixes real GKE incidents.
 
     Config via env vars:
-      LLM_BACKEND    - "hf" (default) or "openai"
-      LLM_MODEL      - model name (default: Qwen/Qwen2.5-72B-Instruct)
+      GYM_MODE       - "standard" (default) or "adversarial"
+      LLM_BACKEND    - "openai" (default), "hf", or "anthropic"
+      LLM_MODEL      - model name
       HF_TOKEN       - HuggingFace token
+      ANTHROPIC_API_KEY - Anthropic API key (for adversarial mode)
       K8S_ENDPOINT   - GKE API endpoint
       K8S_TOKEN      - Bearer token for GKE
       K8S_CA_CERT    - Base64 CA cert
@@ -43,15 +50,25 @@ class KubeSreGymEnvironment(Environment):
     def __init__(self):
         llm = LLMClient()
         self.backend = K8sBackend()
-        self.generator = ScenarioGenerator(llm, mode=os.environ.get("GENERATOR_MODE", "simple"))
         self.curriculum = CurriculumController()
-        self.judge = LLMJudge(llm)
+        self.mode = os.environ.get("GYM_MODE", "standard")
 
         self.scenario = None
         self._step_count = 0
-        self.max_steps = 15
+        self.max_steps = int(os.environ.get("MAX_STEPS", "15"))
         self.history = []
         self._state = KubeSreGymState(episode_id=str(uuid4()), step_count=0)
+
+        if self.mode == "adversarial":
+            self.designer = AdversarialDesigner(llm, self.backend, max_steps=self.max_steps)
+            self.judge = AdversarialJudge(llm)
+            self.generator = None
+            logger.info("GYM_MODE=adversarial — LLM designs multi-step incidents")
+        else:
+            self.designer = None
+            self.generator = ScenarioGenerator(llm, mode=os.environ.get("GENERATOR_MODE", "simple"))
+            self.judge = LLMJudge(llm)
+            logger.info("GYM_MODE=standard — using scenario pool/generator")
 
     def reset(self) -> KubeSreGymObservation:
         self.backend.reset()
@@ -59,8 +76,12 @@ class KubeSreGymEnvironment(Environment):
         skill_profile = self.curriculum.get_skill_profile()
         difficulty = self.curriculum.get_difficulty()
 
-        self.scenario = self.generator.generate(skill_profile, difficulty)
-        self.backend.inject_failure(self.scenario.failure_type, self.scenario.params)
+        if self.mode == "adversarial":
+            self.scenario = self.designer.design(skill_profile, difficulty)
+            self.designer.inject(self.scenario)
+        else:
+            self.scenario = self.generator.generate(skill_profile, difficulty)
+            self.backend.inject_failure(self.scenario.failure_type, self.scenario.params)
 
         self._step_count = 0
         self.history = []
@@ -75,8 +96,12 @@ class KubeSreGymEnvironment(Environment):
             curriculum_stats=self.curriculum.get_stats(),
         )
 
-        cluster_summary = self.backend.execute("kubectl get pods --all-namespaces")
         persona = self.curriculum.get_judge_persona()
+
+        # Initial observation: richer snapshot so agent can decide where to dig
+        pods_output = self.backend.execute("kubectl get pods --all-namespaces")
+        events_output = self.backend.execute("kubectl get events --all-namespaces")
+        cluster_summary = f"=== POD STATUS ===\n{pods_output}\n\n=== RECENT EVENTS ===\n{events_output}"
 
         return KubeSreGymObservation(
             command_output=(
@@ -101,26 +126,37 @@ class KubeSreGymEnvironment(Environment):
 
         output = self.backend.execute(action.command)
 
+        # Penalize repeated commands (same command run before)
+        repeat_count = sum(1 for h in self.history if h["command"] == action.command)
+
         persona = self.curriculum.get_judge_persona()
         reward, feedback = self.judge.evaluate(
             action.command, output, self.scenario, self.history, persona
         )
 
+        if repeat_count > 0:
+            penalty = min(0.5, repeat_count * 0.15)
+            reward -= penalty
+            feedback += f" Repeated command ({repeat_count + 1}x)."
+
         done = False
 
         if action.command.startswith("fix:"):
             health = self.backend.check_health()
-            all_healthy = all(
-                s in ("Running", "Completed")
-                for ns_pods in health.values()
-                for s in ns_pods.values()
+            healthy_count = sum(
+                1 for ns_pods in health.values() for s in ns_pods.values()
+                if s in ("Running", "Completed")
             )
+            total_count = sum(len(ns_pods) for ns_pods in health.values())
+            all_healthy = healthy_count == total_count and total_count > 0
+
             if all_healthy:
                 done = True
                 reward += 0.5
                 feedback = "Incident resolved! All pods healthy."
             else:
-                feedback += " Fix applied but cluster not fully healthy yet."
+                # Partial progress feedback — tell agent how many pods are healthy
+                feedback += f" Fix applied. {healthy_count}/{total_count} pods healthy."
 
         if self._step_count >= self.max_steps:
             done = True
@@ -136,8 +172,13 @@ class KubeSreGymEnvironment(Environment):
         })
 
         if done:
+            # Track adversarial scenarios by name for curriculum granularity
+            track_type = self.scenario.failure_type
+            if hasattr(self.scenario, "name") and self.scenario.name:
+                track_type = f"adversarial:{self.scenario.name}"
+
             self.curriculum.record(
-                failure_type=self.scenario.failure_type,
+                failure_type=track_type,
                 success="resolved" in feedback.lower(),
                 steps=self._step_count,
                 reward=sum(h["reward"] for h in self.history),
@@ -145,7 +186,12 @@ class KubeSreGymEnvironment(Environment):
             self._state.is_resolved = "resolved" in feedback.lower()
             self._state.cumulative_reward = sum(h["reward"] for h in self.history)
 
-        cluster_summary = self.backend.execute("kubectl get pods --all-namespaces")
+        # Only auto-fetch cluster summary after fix attempts or on done
+        # Otherwise the agent should run its own diagnostic commands
+        if action.command.startswith("fix:") or done:
+            cluster_summary = self.backend.execute("kubectl get pods --all-namespaces")
+        else:
+            cluster_summary = ""
 
         return KubeSreGymObservation(
             command_output=output,

@@ -50,3 +50,41 @@ class ScenarioSpec:
     alert_message: str
     correct_fix_description: str
     expected_diagnostic_path: list[str] = field(default_factory=list)
+
+
+@dataclass
+class IncidentStep:
+    """One mutation in a multi-step adversarial incident."""
+    action: str
+    effect: str
+    order: int
+    is_root_cause: bool = False
+
+
+@dataclass
+class AdversarialScenarioSpec:
+    """Multi-step incident designed by an external LLM judge.
+
+    Compatible with ScenarioSpec interface (same fields used by judge.evaluate).
+    """
+    # Fields matching ScenarioSpec interface (used by LLMJudge.evaluate)
+    failure_type: str
+    namespace: str
+    deployment: str
+    root_cause: str
+    difficulty: float
+    alert_message: str
+    correct_fix_description: str
+
+    # Multi-step incident fields
+    name: str = ""
+    steps: list[IncidentStep] = field(default_factory=list)
+    diagnosis_steps: list[str] = field(default_factory=list)
+    fix_steps: list[str] = field(default_factory=list)
+    verify_steps: list[str] = field(default_factory=list)
+    red_herrings: list[str] = field(default_factory=list)
+    expected_observation_hints: list[str] = field(default_factory=list)
+
+    # Kept for ScenarioSpec compat
+    params: dict = field(default_factory=dict)
+    expected_diagnostic_path: list[str] = field(default_factory=list)

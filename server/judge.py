@@ -2,9 +2,9 @@ import logging
 from .llm_client import LLMClient
 
 try:
-    from ..models import ScenarioSpec
+    from ..models import ScenarioSpec, AdversarialScenarioSpec
 except ImportError:
-    from models import ScenarioSpec
+    from models import ScenarioSpec, AdversarialScenarioSpec
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ AGENT ACTION:
 
 RECENT HISTORY:
 {history_summary}
-- Total steps taken: {len(history) + 1}/15
+- Total steps taken: {len(history) + 1}
 
 Return JSON only: {{"score": <float -1.0 to 1.0>, "feedback": "<1-2 sentence evaluation>"}}"""
 
@@ -67,3 +67,120 @@ Return JSON only: {{"score": <float -1.0 to 1.0>, "feedback": "<1-2 sentence eva
         except Exception as e:
             logger.error(f"Judge LLM error: {e}")
             return 0.0, "Judge unavailable."
+
+
+# ---- SRE phase detection (heuristic, no LLM call) ----
+
+_TRIAGE_PATTERNS = ("get pods", "get pod", "get po", "get events", "get ev", "top pods", "top nodes", "-A", "--all-namespaces")
+_INVESTIGATE_PATTERNS = ("describe", "logs")
+_MITIGATE_PATTERNS = ("scale", "rollout restart")
+
+
+def _detect_phase(command: str, history: list) -> str:
+    """Classify a command into an SRE workflow phase."""
+    if command.startswith("fix:"):
+        return "fix"
+    if command.startswith("diagnose:"):
+        return "investigation"
+
+    cmd_lower = command.lower()
+
+    # Post-fix verification: any read command after a fix was applied
+    has_fix = any(h["command"].startswith("fix:") for h in history)
+    if has_fix and any(p in cmd_lower for p in ("get pods", "get po", "get events", "logs")):
+        return "verification"
+
+    if any(p in cmd_lower for p in _MITIGATE_PATTERNS):
+        return "mitigation"
+    if any(p in cmd_lower for p in _INVESTIGATE_PATTERNS):
+        return "investigation"
+    if any(p in cmd_lower for p in _TRIAGE_PATTERNS):
+        return "triage"
+
+    return "triage"
+
+
+# Phase order: lower number = earlier in correct SRE workflow
+_PHASE_ORDER = {"triage": 0, "investigation": 1, "mitigation": 2, "fix": 3, "verification": 4}
+
+
+class AdversarialJudge(LLMJudge):
+    """Extends LLMJudge with phase-aware scoring for multi-step incidents.
+
+    Rewards:
+      - Following the correct SRE workflow order (triage -> investigate -> fix -> verify)
+      - Identifying and dismissing red herrings
+    Penalties:
+      - Skipping phases (e.g. jumping straight to fix without investigation)
+    """
+
+    def evaluate(
+        self,
+        command: str,
+        output: str,
+        scenario,
+        history: list,
+        persona: str = "senior",
+    ) -> tuple[float, str]:
+        # Get base score from LLM
+        base_score, feedback = super().evaluate(command, output, scenario, history, persona)
+
+        current_phase = _detect_phase(command, history)
+
+        # Bonus: correct phase ordering
+        if self._is_phase_order_correct(current_phase, history):
+            base_score += 0.2
+        else:
+            # Penalty: skipping phases
+            skipped = self._get_skipped_phases(current_phase, history)
+            if skipped:
+                base_score -= 0.3
+                feedback += f" Skipped {', '.join(skipped)} before {current_phase}."
+
+        # Bonus: red herring awareness (investigating something misleading
+        # but not trying to fix it)
+        if isinstance(scenario, AdversarialScenarioSpec) and scenario.red_herrings:
+            if self._touches_red_herring(command, output, scenario) and not command.startswith("fix:"):
+                base_score += 0.15
+                feedback += " Good investigation of a misleading symptom."
+
+        score = max(-1.0, min(1.0, base_score))
+        return score, feedback
+
+    def _is_phase_order_correct(self, current_phase: str, history: list) -> bool:
+        """Check if the current phase follows the expected SRE order."""
+        if not history:
+            return current_phase == "triage"
+
+        current_order = _PHASE_ORDER.get(current_phase, 0)
+        past_phases = [_detect_phase(h["command"], history[:i]) for i, h in enumerate(history)]
+        if not past_phases:
+            return True
+
+        max_past_order = max(_PHASE_ORDER.get(p, 0) for p in past_phases)
+        # Allow same phase or next phase, not jumping ahead by more than 1
+        return current_order >= max_past_order - 1
+
+    def _get_skipped_phases(self, current_phase: str, history: list) -> list[str]:
+        """Return list of phases that were skipped."""
+        current_order = _PHASE_ORDER.get(current_phase, 0)
+        if current_order <= 1:
+            return []
+
+        past_phases = {_detect_phase(h["command"], history[:i]) for i, h in enumerate(history)}
+        past_phases.add(current_phase)
+
+        skipped = []
+        for phase, order in _PHASE_ORDER.items():
+            if order < current_order and phase not in past_phases:
+                skipped.append(phase)
+        return skipped
+
+    def _touches_red_herring(self, command: str, output: str, scenario: AdversarialScenarioSpec) -> bool:
+        """Check if the command output relates to a known red herring."""
+        for herring in scenario.red_herrings:
+            herring_keywords = herring.lower().split()
+            output_lower = output.lower()
+            if any(kw in output_lower for kw in herring_keywords if len(kw) > 3):
+                return True
+        return False

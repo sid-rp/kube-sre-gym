@@ -1,9 +1,10 @@
 """
 Unified LLM client for the environment.
 
-Two backends:
-  - HF Inference API (default) — free, serverless, no infra needed
-  - OpenAI-compatible (vLLM/local) — for self-hosted models
+Three backends:
+  - OpenAI-compatible (vLLM/local) — for self-hosted models (default)
+  - HF Inference API — free, serverless, no infra needed
+  - Anthropic (Claude) — external judge, frees GPU memory
 """
 
 import os
@@ -18,24 +19,36 @@ class LLMClient:
     Thin wrapper that picks the right backend based on env vars.
 
     Config:
-      LLM_BACKEND=openai (default) → uses OpenAI-compatible endpoint (vLLM on H100)
-      LLM_BACKEND=hf              → uses HF Inference API (requires credits)
-
-    HF mode env vars:
-      HF_TOKEN      — HuggingFace token
-      LLM_MODEL     — model ID (default: Qwen/Qwen2.5-72B-Instruct)
+      LLM_BACKEND=openai     (default) → uses OpenAI-compatible endpoint (vLLM on H100)
+      LLM_BACKEND=hf                   → uses HF Inference API (requires credits)
+      LLM_BACKEND=anthropic            → uses Anthropic Claude API
 
     OpenAI mode env vars:
       LLM_BASE_URL  — vLLM endpoint (default: http://localhost:8001/v1)
       LLM_API_KEY   — API key (default: "local")
       LLM_MODEL     — model name
+
+    HF mode env vars:
+      HF_TOKEN      — HuggingFace token
+      LLM_MODEL     — model ID (default: Qwen/Qwen3-14B)
+
+    Anthropic mode env vars:
+      ANTHROPIC_API_KEY — Anthropic API key
+      LLM_MODEL         — model name (default: claude-sonnet-4-20250514)
     """
 
     def __init__(self):
         self.backend = os.environ.get("LLM_BACKEND", "openai")
-        self.model = os.environ.get("LLM_MODEL", "Qwen/Qwen3-14B")
+        default_model = "claude-sonnet-4-20250514" if self.backend == "anthropic" else "Qwen/Qwen3-14B"
+        self.model = os.environ.get("LLM_MODEL", default_model)
 
-        if self.backend == "hf":
+        if self.backend == "anthropic":
+            from anthropic import Anthropic
+            self.client = Anthropic(
+                api_key=os.environ.get("ANTHROPIC_API_KEY"),
+            )
+            logger.info(f"LLM backend: Anthropic ({self.model})")
+        elif self.backend == "hf":
             from huggingface_hub import InferenceClient
             self.client = InferenceClient(
                 model=self.model,
@@ -52,17 +65,29 @@ class LLMClient:
 
     def chat(self, system: str, user: str, temperature: float = 0.3, max_tokens: int = 300) -> str:
         """Send a chat completion request. Returns the raw response text."""
-        if self.backend == "hf":
+        if self.backend == "anthropic":
+            return self._chat_anthropic(system, user, temperature, max_tokens)
+        elif self.backend == "hf":
             return self._chat_hf(system, user, temperature, max_tokens)
         return self._chat_openai(system, user, temperature, max_tokens)
 
-    def chat_json(self, system: str, user: str, temperature: float = 0.3) -> dict:
+    def chat_json(self, system: str, user: str, temperature: float = 0.3, max_tokens: int = 1024) -> dict:
         """Send a chat request and parse the response as JSON."""
-        raw = self.chat(system, user, temperature)
+        raw = self.chat(system, user, temperature, max_tokens)
         raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
         return json.loads(raw)
+
+    def _chat_anthropic(self, system: str, user: str, temperature: float, max_tokens: int) -> str:
+        response = self.client.messages.create(
+            model=self.model,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.content[0].text
 
     def _chat_hf(self, system: str, user: str, temperature: float, max_tokens: int) -> str:
         response = self.client.chat_completion(

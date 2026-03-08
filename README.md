@@ -65,6 +65,32 @@ LLM_BACKEND=openai LLM_BASE_URL=http://localhost:8001/v1 \
 python train.py --vllm-mode colocate
 ```
 
+## Training with External Judge (Adversarial Mode)
+
+Use Claude (or any external LLM) as the judge — no self-hosted judge model needed.
+The LLM designs complex multi-step incidents that teach the agent real SRE workflow:
+triage, investigation, mitigation, fix, verification.
+
+```bash
+# 1. Set env vars
+export K8S_TOKEN=<gke-token>
+export K8S_ENDPOINT=<gke-api-url>
+export K8S_CA_CERT=<base64-ca-cert>
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# 2. Start environment server with adversarial mode (Terminal 1)
+# No vLLM judge needed — Claude is the judge AND scenario designer
+GYM_MODE=adversarial LLM_BACKEND=anthropic uv run server
+
+# 3. Run GRPO training (Terminal 2) — full 80GB for the agent
+python train.py --vllm-mode colocate
+```
+
+In adversarial mode, the external LLM:
+- **Designs** multi-step incidents (cascading failures, red herrings, compound faults)
+- **Injects** them into the real GKE cluster via kubectl mutations
+- **Judges** agent actions with phase-aware scoring (rewards correct SRE workflow order)
+
 ## Development
 
 ```bash
@@ -113,11 +139,13 @@ H100 (all-in-one)                              GKE Cluster
 | `K8S_TOKEN` | Bearer token for GKE | - |
 | `K8S_ENDPOINT` | GKE API endpoint | - |
 | `K8S_CA_CERT` | Base64 CA cert | - |
-| `LLM_BACKEND` | `openai` or `hf` | `openai` |
+| `GYM_MODE` | `standard` or `adversarial` | `standard` |
+| `LLM_BACKEND` | `openai`, `hf`, or `anthropic` | `openai` |
 | `LLM_BASE_URL` | vLLM judge endpoint | `http://localhost:8001/v1` |
 | `LLM_MODEL` | Judge model name | `Qwen/Qwen3-14B` |
+| `ANTHROPIC_API_KEY` | Anthropic API key (adversarial mode) | - |
 | `HF_TOKEN` | HuggingFace token (model push) | - |
-| `GENERATOR_MODE` | `simple` or `llm` | `simple` |
+| `GENERATOR_MODE` | `simple` or `llm` (standard mode only) | `simple` |
 
 ## Project Structure
 
@@ -135,8 +163,9 @@ kube_sre_gym/               (this repo root)
     ├── kube_sre_gym_environment.py  # Core environment (reset/step)
     ├── app.py              # FastAPI application
     ├── k8s_backend.py      # Kubernetes API client
-    ├── llm_client.py       # HF/OpenAI LLM wrapper
-    ├── scenario_generator.py  # Failure scenario generation
+    ├── llm_client.py       # HF/OpenAI/Anthropic LLM wrapper
+    ├── scenario_generator.py  # Failure scenario generation (standard mode)
+    ├── adversarial_designer.py  # LLM-designed multi-step incidents (adversarial mode)
     ├── curriculum.py       # Difficulty & persona controller
-    └── judge.py            # LLM-based action evaluator
+    └── judge.py            # LLMJudge + AdversarialJudge (phase-aware scoring)
 ```
