@@ -243,16 +243,21 @@ class KubeSreGymEnvironment(Environment):
 
         if is_fix:
             # Allow rollout to progress before judging health (set/rollout/patch are async)
-            for _ in range(6):
+            # ContainerCreating/PodInitializing = fix is working, pod still starting
+            STARTING_STATES = ("ContainerCreating", "PodInitializing")
+            for poll in range(12):
                 time.sleep(5)
                 health = self.backend.check_health()
-                healthy_count = sum(
-                    1 for ns_pods in health.values() for s in ns_pods.values()
-                    if s in ("Running", "Completed")
-                )
-                total_count = sum(len(ns_pods) for ns_pods in health.values())
+                statuses = [s for ns_pods in health.values() for s in ns_pods.values()]
+                total_count = len(statuses)
+                healthy_count = sum(1 for s in statuses if s in ("Running", "Completed"))
+                starting_count = sum(1 for s in statuses if s in STARTING_STATES)
                 all_healthy = healthy_count == total_count and total_count > 0
                 if all_healthy:
+                    break
+                # If pods are still starting, keep waiting (up to 60s)
+                if starting_count == 0 and poll >= 3:
+                    # No pods starting and none healthy after 15s — fix didn't work
                     break
 
             if all_healthy:
