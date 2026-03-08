@@ -134,7 +134,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-turns", type=int, default=15, help="Max commands per episode")
     parser.add_argument("--max-new-tokens", type=int, default=512, help="Max tokens per agent response")
     parser.add_argument("--num-generations", type=int, default=4, help="G for GRPO")
-    parser.add_argument("--learning-rate", type=float, default=5e-6)
+    parser.add_argument("--learning-rate", type=float, default=2e-6)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=-1, help="Max GRPO training steps (-1 = auto)")
@@ -286,8 +286,14 @@ def rollout_once(
     # and to build on previous investigation results
     conversation_history: list[dict] = []
 
+    MAX_TOTAL_TOKENS = 4096  # cap to prevent OOM during backward pass
+
     for _turn in range(max_turns):
         if result.done:
+            break
+
+        # Stop if we've accumulated too many tokens (prevents CUDA OOM)
+        if len(completion_ids) >= MAX_TOTAL_TOKENS:
             break
 
         # Build prompt with full history so agent has context
@@ -522,8 +528,8 @@ def main() -> None:
         learning_rate=args.learning_rate,
         lr_scheduler_type="constant_with_warmup",  # cosine/linear hurts GRPO
         warmup_steps=2,
-        max_grad_norm=0.2,  # lower than default 1.0 for GRPO stability
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        max_grad_norm=0.1,  # very conservative to prevent collapse
+        gradient_accumulation_steps=2,  # reduced from 4 to save GPU memory
         per_device_train_batch_size=1,
         generation_batch_size=args.num_generations,
         num_generations=args.num_generations,
