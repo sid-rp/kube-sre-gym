@@ -642,6 +642,13 @@ def main() -> None:
     finally:
         env.close()
 
+        # Always generate the reward plot — even if training was interrupted.
+        # CSV is written incrementally so we always have data.
+        try:
+            plot_rewards(reward_log_path, output_dir / "reward_plot.png")
+        except Exception as e:
+            logger.warning(f"Could not generate reward plot: {e}")
+
     # ---- Save ----
     trainer.save_model(str(output_dir))
     logger.info(f"Model saved to {output_dir}")
@@ -650,12 +657,6 @@ def main() -> None:
     if args.push_to_hub and args.hub_repo:
         trainer.push_to_hub()
         logger.info(f"Model pushed to https://huggingface.co/{args.hub_repo}")
-
-    # ---- Plot rewards ----
-    try:
-        plot_rewards(reward_log_path, output_dir / "reward_plot.png")
-    except Exception as e:
-        logger.warning(f"Could not generate reward plot: {e}")
 
     logger.info("Done!")
 
