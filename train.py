@@ -139,6 +139,7 @@ def parse_args() -> argparse.Namespace:
         help="vLLM mode: colocate (1 GPU) or server (separate vLLM process)",
     )
     parser.add_argument("--vllm-server-url", default="http://localhost:8001", help="vLLM server URL (server mode)")
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.5, help="vLLM GPU memory fraction (0.0-1.0)")
     parser.add_argument("--temperature", type=float, default=1.0)  # T=1.0 optimal for GRPO exploration
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
@@ -514,6 +515,7 @@ def main() -> None:
         use_vllm=True,
         vllm_mode=args.vllm_mode,
         vllm_server_base_url=args.vllm_server_url if args.vllm_mode == "server" else None,
+        vllm_gpu_memory_utilization=args.vllm_gpu_memory_utilization,
         output_dir=str(output_dir),
         max_steps=args.max_steps,
         num_train_epochs=args.num_epochs,
