@@ -15,7 +15,7 @@ import time
 from uuid import uuid4
 
 from openenv.core.env_server.interfaces import Environment
-from .constants import MAX_STEPS
+from .constants import MAX_STEPS, INJECT_VISIBILITY_MAX_POLLS, INJECT_VISIBILITY_INTERVAL
 
 try:
     from ..models import KubeSreGymAction, KubeSreGymObservation, KubeSreGymState
@@ -92,8 +92,6 @@ class KubeSreGymEnvironment(Environment):
     def _do_reset(self) -> KubeSreGymObservation:
         # Step 1: Deploy clean healthy cluster (base manifests only)
         self.backend.reset()
-        # Extra settle time — K8s rollouts are async, pods need time to stabilize
-        time.sleep(10)
         logger.info("Cluster reset complete")
 
         skill_profile = self.curriculum.get_skill_profile()
@@ -129,9 +127,8 @@ class KubeSreGymEnvironment(Environment):
             )
             self.backend.inject_failure(self.scenario.failure_type, self.scenario.params)
 
-        # Wait for fault symptoms to manifest (OOMKill, CrashLoop, ImagePull)
-        logger.info("Waiting for fault symptoms to manifest...")
-        time.sleep(10)
+        # Step 3: Wait for fault to actually manifest before snapshotting
+        self._wait_for_fault_visible()
 
         self._step_count = 0
         self.history = []
@@ -168,6 +165,33 @@ class KubeSreGymEnvironment(Environment):
             hint="Start by checking pod status in the affected namespace." if persona == "junior" else "",
             done=False,
             reward=0.0,
+        )
+
+    def _wait_for_fault_visible(self):
+        """Poll until at least one pod shows unhealthy status."""
+        fault_type = self.scenario.failure_type if self.scenario else ""
+
+        # resource_quota doesn't crash existing pods, just blocks new ones
+        if fault_type == "resource_quota":
+            time.sleep(3)
+            return
+
+        for i in range(INJECT_VISIBILITY_MAX_POLLS):
+            health = self.backend.check_health()
+            unhealthy = [
+                f"{ns}/{pod}"
+                for ns, pods in health.items()
+                for pod, status in pods.items()
+                if status not in ("Running", "Completed")
+            ]
+            if unhealthy:
+                logger.info(f"Fault visible after {i + 1} polls: {unhealthy[:3]}")
+                return
+            time.sleep(INJECT_VISIBILITY_INTERVAL)
+
+        logger.warning(
+            f"Fault '{fault_type}' not visible after {INJECT_VISIBILITY_MAX_POLLS} polls "
+            f"({INJECT_VISIBILITY_MAX_POLLS * INJECT_VISIBILITY_INTERVAL}s) — proceeding anyway"
         )
 
     def step(self, action: KubeSreGymAction) -> KubeSreGymObservation:
