@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-size", type=int, default=50, help="Number of training episodes")
     parser.add_argument("--max-turns", type=int, default=15, help="Max commands per episode")
     parser.add_argument("--max-new-tokens", type=int, default=512, help="Max tokens per agent response")
-    parser.add_argument("--num-generations", type=int, default=4, help="G for GRPO")
+    parser.add_argument("--num-generations", type=int, default=8, help="G for GRPO (8+ recommended for stable advantage estimation)")
     parser.add_argument("--learning-rate", type=float, default=2e-6)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--num-epochs", type=int, default=1)
@@ -150,7 +150,7 @@ def parse_args() -> argparse.Namespace:
         help="vLLM mode: colocate (1 GPU) or server (separate vLLM process)",
     )
     parser.add_argument("--vllm-server-url", default="http://localhost:8001", help="vLLM server URL (server mode)")
-    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--temperature", type=float, default=1.0)  # T=1.0 optimal for GRPO exploration
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha (typically 2x rank)")
@@ -529,10 +529,10 @@ def main() -> None:
         max_steps=args.max_steps,
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
-        lr_scheduler_type="constant_with_warmup",  # cosine/linear hurts GRPO
+        lr_scheduler_type="cosine",  # cosine decay works well with GRPO
         warmup_steps=2,
-        max_grad_norm=0.1,  # very conservative to prevent collapse
-        gradient_accumulation_steps=2,  # reduced from 4 to save GPU memory
+        max_grad_norm=1.0,  # standard clipping (0.1 was too conservative)
+        gradient_accumulation_steps=4,  # larger effective batch for stable GRPO
         per_device_train_batch_size=1,
         generation_batch_size=args.num_generations,
         num_generations=args.num_generations,
@@ -547,6 +547,10 @@ def main() -> None:
         push_to_hub=args.push_to_hub,
         hub_model_id=args.hub_repo if args.push_to_hub else None,
         save_total_limit=3,  # keep last 3 checkpoints to save disk
+        # DAPO-style improvements over vanilla GRPO:
+        loss_type="dapo",  # asymmetric clipping + dynamic sampling
+        mask_truncated_completions=True,  # exclude token-capped episodes from loss
+        beta=0.01,  # lighter KL penalty — model needs to diverge from base
     )
 
     # ---- Reward CSV logger ----
