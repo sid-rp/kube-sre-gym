@@ -282,15 +282,18 @@ class KubeSreGymEnvironment(Environment):
 
             if all_healthy:
                 done = True
-                reward += 0.5
-                feedback = "Incident resolved! All pods healthy."
+                # Efficiency bonus: solving in fewer steps is better
+                # Max bonus at step 1 (3.0), min bonus at max_steps (1.0)
+                efficiency = 1.0 + 2.0 * (1.0 - self._step_count / self.max_steps)
+                reward += efficiency
+                feedback = f"Incident resolved! All pods healthy. (efficiency bonus: +{efficiency:.1f})"
             else:
                 # Partial progress feedback — tell agent how many pods are healthy
                 feedback += f" Fix applied. {healthy_count}/{total_count} pods healthy."
 
         if self._step_count >= self.max_steps:
             done = True
-            reward -= 0.2
+            reward -= 1.0  # significant timeout penalty
             feedback = "Timeout -- incident remains unresolved."
 
         self.history.append({
@@ -307,8 +310,11 @@ class KubeSreGymEnvironment(Environment):
             if hasattr(self.scenario, "name") and self.scenario.name:
                 track_type = f"adversarial:{self.scenario.name}"
 
-            total_reward = sum(h["reward"] for h in self.history)
-            resolved = feedback == "Incident resolved! All pods healthy."
+            # Normalize total reward by number of steps to avoid rewarding
+            # long episodes over efficient ones
+            raw_sum = sum(h["reward"] for h in self.history)
+            total_reward = raw_sum / self._step_count if self._step_count > 0 else 0.0
+            resolved = "Incident resolved!" in feedback
             self.curriculum.record(
                 failure_type=track_type,
                 success=resolved,
