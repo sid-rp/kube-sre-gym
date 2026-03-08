@@ -27,3 +27,4 @@ outputs/
 
 # OS
 .DS_Store
+assets/*.png

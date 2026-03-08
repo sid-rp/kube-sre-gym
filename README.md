@@ -176,26 +176,54 @@ This produces clear separation: successful episodes score +3 to +8, failed episo
 
 ## Results
 
-Training Qwen3-1.7B with GRPO on H100:
+### Training Run 1: Qwen2.5-1.5B — The Cold Start
 
-| Metric | Episodes 1-3 | Episodes 4-8 |
-|--------|-------------|--------------|
-| Reward | -2.0 (all failures) | +3.95 to +8.15 |
-| Resolution | 0% | ~50% |
-| Key breakthrough | Doesn't know namespaces | Learns `kubectl get pods -A` → diagnose → fix |
+![Qwen2.5-1.5B Reward Curve](https://raw.githubusercontent.com/sid-rp/kube-sre-gym/main/assets/reward_curve_qwen2.5_1.5b.png)
 
-**What the agent learned (from reward signal alone):**
+Our first attempt. 12 episodes, massive variance swinging between -7.5 and +3.7. The upward trend (+0.447/ep) was encouraging — the model *was* learning — but the signal was too noisy. We traced this to **environment bugs**: our command parser rejected valid kubectl syntax, the error penalty override was masking real progress, and the judge was truncating cluster snapshots.
+
+The model was fighting two battles: learning Kubernetes AND working around our broken environment.
+
+### Training Run 2: Qwen3-1.7B — Too Much Reward, Too Soon
+
+![Qwen3-1.7B Reward Curve](https://raw.githubusercontent.com/sid-rp/kube-sre-gym/main/assets/reward_curve_qwen3_1.7b.png)
+
+After fixing the environment bugs, we switched to Qwen3-1.7B. It started strong (avg ~5.0) but the reward signal was *too generous* — the model found a plateau at 3.0-3.5 and stopped improving. The slight downward trend (-0.073/ep) over 29 episodes told us the curriculum wasn't pushing hard enough.
+
+This run taught us that **a good environment needs to fight back**. We tightened the reward function, added repeat-command penalties, and activated adversarial mode.
+
+### Training Run 3: Qwen3-1.7B — Environment Fights Back (Ongoing)
+
+Current run with all fixes applied — adversarial scenarios, tighter rewards, repeat-command circuit breaker:
+
+| Episode | Reward | Diagnosis | Fix |
+|---------|--------|-----------|-----|
+| 1 | +1.80 | 0.30 | -0.10 |
+| 2 | +5.38 | 0.30 | +0.10 |
+| 3 | -2.50 | 0.70 | 0.00 |
+| 4 | **+6.58** | 0.70 | -0.60 |
+| 5 | +5.45 | 0.70 | 0.00 |
+| 6 | -2.00 | 0.55 | -0.60 |
+| 7 | **+6.79** | 0.70 | +0.50 |
+| 8 | +6.35 | 0.20 | +0.40 |
+
+**Mean: 3.48 | Best: 6.79** — with real adversarial difficulty. The high-variance episodes (ep3, ep6 are negatives; ep4, ep7 are +6.5) show GRPO is getting the signal variance it needs to compute meaningful advantages.
+
+### What the agent learned (from reward signal alone)
+
 1. Run `kubectl get pods -A` to discover cluster topology
 2. Identify fault types from pod STATUS column (OOMKilled, ImagePullBackOff, CrashLoopBackOff)
 3. Map fault types to correct fix commands (`set resources`, `set image`, `patch`, `scale`)
-4. Use the correct namespace (not the deployment name as namespace)
-5. Verify fixes by re-checking pod status
+4. Check ALL namespaces after each fix — there may be multiple faults
+5. Never repeat a failed command — try a different approach
 
-**What we learned (from the agent's failures):**
+### What we learned (from the agent's failures)
+
 1. Our command parser was too strict — valid kubectl syntax was being rejected
 2. Judge snapshot truncation hid pods alphabetically after `payment-*`
-3. Race conditions between health checks and judge verification caused false negatives
-4. The environment needs to evolve alongside the agent — static environments miss bugs
+3. Error penalty override was masking real progress with false negatives
+4. Too-generous rewards cause plateaus — the environment must fight back
+5. The environment needs to evolve alongside the agent — static environments miss bugs
 
 ---
 
