@@ -316,20 +316,26 @@ class KubeSreGymEnvironment(Environment):
 
                 if all_healthy:
                     # OOM pods can appear briefly Running before crashing again.
-                    # Double-check after a short delay to catch flapping pods.
-                    time.sleep(5)
-                    health2 = self.backend.check_health()
-                    if is_adversarial:
-                        check2 = health2
-                    elif affected_ns and affected_ns in health2:
-                        check2 = {affected_ns: health2[affected_ns]}
-                    else:
-                        check2 = health2
-                    statuses2 = [s for ns_pods in check2.values() for s in ns_pods.values()]
-                    healthy2 = sum(1 for s in statuses2 if s in ("Running", "Completed"))
-                    all_healthy = (healthy2 >= expected_pods
-                                   and healthy2 == len(statuses2)
-                                   and len(statuses2) > 0)
+                    # Triple-check with increasing delays to catch flapping pods.
+                    # nginx with 4Mi limit can survive ~10s before OOM kill.
+                    still_healthy = True
+                    for recheck_delay in (5, 10):
+                        time.sleep(recheck_delay)
+                        health2 = self.backend.check_health()
+                        if is_adversarial:
+                            check2 = health2
+                        elif affected_ns and affected_ns in health2:
+                            check2 = {affected_ns: health2[affected_ns]}
+                        else:
+                            check2 = health2
+                        statuses2 = [s for ns_pods in check2.values() for s in ns_pods.values()]
+                        healthy2 = sum(1 for s in statuses2 if s in ("Running", "Completed"))
+                        if not (healthy2 >= expected_pods
+                                and healthy2 == len(statuses2)
+                                and len(statuses2) > 0):
+                            still_healthy = False
+                            break
+                    all_healthy = still_healthy
                     if all_healthy:
                         break
                     # Flapping detected — keep polling
