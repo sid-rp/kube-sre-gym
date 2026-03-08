@@ -196,18 +196,33 @@ class K8sBackend:
             subprocess.run(["kubectl", "apply", "-R", "-f", base_dir],
                            capture_output=True, timeout=60)
 
-        # Wait for pods to stabilize
-        for _ in range(RESET_MAX_POLLS):
-            health = self.check_health()
-            all_healthy = all(
-                s in ("Running", "Completed")
-                for ns_pods in health.values() for s in ns_pods.values()
-            ) if health else False
-            if all_healthy and health:
-                logger.info("Cluster reset complete — all pods healthy")
+        # Wait for pods to stabilize (only check namespaces we actually reset)
+        reset_namespaces = list(HEALTHY_STATE.keys())
+        for poll in range(RESET_MAX_POLLS):
+            health = {}
+            for ns in reset_namespaces:
+                try:
+                    pods = self.v1.list_namespaced_pod(ns)
+                    health[ns] = {
+                        p.metadata.name: _pod_status(p)
+                        for p in pods.items
+                    }
+                except ApiException:
+                    health[ns] = {}
+
+            unhealthy = [
+                f"{ns}/{pod}={status}"
+                for ns, pods in health.items()
+                for pod, status in pods.items()
+                if status not in ("Running", "Completed", "Terminating")
+            ]
+            if not unhealthy:
+                logger.info(f"Cluster reset complete — all pods healthy (poll {poll + 1})")
                 return
+            if poll % 5 == 4:
+                logger.info(f"Reset poll {poll + 1}: waiting on {unhealthy[:3]}")
             time.sleep(RESET_POLL_INTERVAL)
-        logger.warning("Cluster reset timed out — some pods may not be healthy")
+        logger.warning(f"Cluster reset timed out — unhealthy: {unhealthy[:5]}")
 
     def check_health(self) -> dict:
         """Return {namespace: {pod_name: status}} for all app namespaces."""
