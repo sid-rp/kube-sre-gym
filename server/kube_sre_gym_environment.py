@@ -281,68 +281,67 @@ class KubeSreGymEnvironment(Environment):
 
         if is_fix:
             # Allow rollout to progress before judging health (set/rollout/patch are async)
-            # ContainerCreating/PodInitializing = fix is working, pod still starting
-            # Only check the affected namespace — other namespaces may have stale pods
             STARTING_STATES = ("ContainerCreating", "PodInitializing")
             affected_ns = self.scenario.namespace if self.scenario else None
-            # Adversarial scenarios inject faults across multiple namespaces —
-            # must check ALL namespaces, not just the primary one
             is_adversarial = (self.scenario and self.scenario.failure_type == "adversarial")
+
+            # Snapshot restart counts BEFORE waiting — any increase = flapping
+            pre_health = self.backend.check_health_detailed()
+            pre_restarts = {}
+            for ns, pods in pre_health.items():
+                for pod_name, info in pods.items():
+                    pre_restarts[f"{ns}/{pod_name}"] = info["restarts"]
+
             for poll in range(12):
                 time.sleep(5)
-                health = self.backend.check_health()
+                health = self.backend.check_health_detailed()
                 if is_adversarial:
-                    # Check all app namespaces for multi-fault scenarios
                     check_health = health
                 elif affected_ns and affected_ns in health:
                     check_health = {affected_ns: health[affected_ns]}
                 else:
                     check_health = health
-                statuses = [s for ns_pods in check_health.values() for s in ns_pods.values()]
-                total_count = len(statuses)
-                healthy_count = sum(1 for s in statuses if s in ("Running", "Completed"))
-                starting_count = sum(1 for s in statuses if s in STARTING_STATES)
 
-                # Check that we have the EXPECTED number of pods, not just that
-                # existing pods are healthy. scale-to-zero or missing pods = not resolved.
+                # Flatten pod info
+                all_pods = [
+                    (f"{ns}/{name}", info)
+                    for ns, pods in check_health.items()
+                    for name, info in pods.items()
+                ]
+                total_count = len(all_pods)
+                healthy_count = sum(1 for _, info in all_pods
+                                    if info["status"] in ("Running", "Completed"))
+                starting_count = sum(1 for _, info in all_pods
+                                     if info["status"] in STARTING_STATES)
+
+                # Check any pod has OOMKilled in last termination reason
+                has_oom = any(info["oom_killed"] for _, info in all_pods)
+
+                # Check restart count increased — pod is flapping
+                restarts_increased = any(
+                    info["restarts"] > pre_restarts.get(key, 0)
+                    for key, info in all_pods
+                )
+
+                # Expected pod count from HEALTHY_STATE
                 expected_pods = 0
                 for ns, deploys in HEALTHY_STATE.items():
                     if is_adversarial or ns == affected_ns or affected_ns is None:
                         if ns in check_health:
                             expected_pods += sum(d["replicas"] for d in deploys.values())
+
                 all_healthy = (healthy_count >= expected_pods
                                and healthy_count == total_count
-                               and total_count > 0)
+                               and total_count > 0
+                               and not has_oom
+                               and not restarts_increased)
 
                 if all_healthy:
-                    # OOM pods can appear briefly Running before crashing again.
-                    # Triple-check with increasing delays to catch flapping pods.
-                    # nginx with 4Mi limit can survive ~10s before OOM kill.
-                    still_healthy = True
-                    for recheck_delay in (5, 10):
-                        time.sleep(recheck_delay)
-                        health2 = self.backend.check_health()
-                        if is_adversarial:
-                            check2 = health2
-                        elif affected_ns and affected_ns in health2:
-                            check2 = {affected_ns: health2[affected_ns]}
-                        else:
-                            check2 = health2
-                        statuses2 = [s for ns_pods in check2.values() for s in ns_pods.values()]
-                        healthy2 = sum(1 for s in statuses2 if s in ("Running", "Completed"))
-                        if not (healthy2 >= expected_pods
-                                and healthy2 == len(statuses2)
-                                and len(statuses2) > 0):
-                            still_healthy = False
-                            break
-                    all_healthy = still_healthy
-                    if all_healthy:
-                        break
-                    # Flapping detected — keep polling
-                    continue
+                    break
                 # If pods are still starting, keep waiting (up to 60s)
                 if starting_count == 0 and poll >= 3:
-                    # No pods starting and none healthy after 15s — fix didn't work
+                    if has_oom:
+                        logger.info(f"    OOM detected — pods still flapping after fix")
                     break
 
             if all_healthy:

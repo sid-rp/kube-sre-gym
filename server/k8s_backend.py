@@ -264,6 +264,37 @@ class K8sBackend:
                 health[ns] = {}
         return health
 
+    def check_health_detailed(self) -> dict:
+        """Return {namespace: {pod_name: {status, restarts, oom_killed}}} for all app namespaces.
+
+        Used by the environment to detect OOM-flapping pods that briefly appear Running
+        before getting killed again.
+        """
+        health = {}
+        for ns in self.app_namespaces:
+            try:
+                pods = self.v1.list_namespaced_pod(ns)
+                health[ns] = {}
+                for p in pods.items:
+                    restarts = sum(
+                        (cs.restart_count or 0)
+                        for cs in (p.status.container_statuses or [])
+                    )
+                    oom_killed = any(
+                        cs.last_state and cs.last_state.terminated
+                        and cs.last_state.terminated.reason == "OOMKilled"
+                        for cs in (p.status.container_statuses or [])
+                    )
+                    health[ns][p.metadata.name] = {
+                        "status": _pod_status(p),
+                        "restarts": restarts,
+                        "oom_killed": oom_killed,
+                    }
+            except ApiException as e:
+                logger.error(f"check_health_detailed: failed for '{ns}': {e.reason}")
+                health[ns] = {}
+        return health
+
     @staticmethod
     def _parse_namespace(parts: list[str]) -> str | None:
         for i, p in enumerate(parts):
