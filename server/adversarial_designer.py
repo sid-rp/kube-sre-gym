@@ -151,45 +151,36 @@ Max faults to inject: {max_mutations}
 
 STEP 3 — AVAILABLE FAULT TYPES
 
-Use ONLY these inject/fix pairs. Each shows the exact kubectl syntax.
+Use ONLY these inject/fix pairs. These are the ONLY faults that reliably break pods.
 
-1. WRONG DATABASE/SERVICE HOST
-   Inject: kubectl set env deployment/<deploy> -n <ns> DB_HOST=wrong-host.invalid
-   Fix:    kubectl set env deployment/<deploy> -n <ns> DB_HOST=<correct from healthy baseline>
-   Symptoms: pods Running but app logs show "connection refused" or "host not found"
-   Cascading: dependent services get timeouts, may exhaust memory from retries
-
-2. WRONG PORT NUMBER
-   Inject: kubectl set env deployment/<deploy> -n <ns> PORT=9999
-   Fix:    kubectl set env deployment/<deploy> -n <ns> PORT=<correct from healthy baseline>
-   Symptoms: readiness probe fails (port mismatch), service returns connection refused
-   Red herring: looks like a network issue but it's a config issue
-
-3. LOW MEMORY LIMIT (OOMKill)
+1. LOW MEMORY LIMIT (OOMKill) — works on ANY deployment
    Inject: kubectl set resources deployment/<deploy> -n <ns> --limits=memory=4Mi
    Fix:    kubectl set resources deployment/<deploy> -n <ns> --limits=memory=<correct from healthy baseline>
    Symptoms: OOMKilled status, exit code 137, pod restarts
    Red herring: looks like a memory leak but it's just a low limit
 
-4. BAD IMAGE TAG
+2. BAD IMAGE TAG — works on ANY deployment
    Inject: kubectl set image deployment/<deploy> -n <ns> <container>=nginx:nonexistent-tag-99999
    Fix:    kubectl set image deployment/<deploy> -n <ns> <container>=<correct from healthy baseline>
    Symptoms: ImagePullBackOff, ErrImagePull
 
-5. SCALE TO ZERO
+3. SCALE TO ZERO — works on ANY deployment
    Inject: kubectl scale deployment/<deploy> -n <ns> --replicas=0
    Fix:    kubectl scale deployment/<deploy> -n <ns> --replicas=<correct from healthy baseline>
    Symptoms: no pods, dependent services fail with connection refused
 
-6. BAD LIVENESS PROBE
-   Inject: kubectl patch deployment/<deploy> -n <ns> -p '{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"<container>","livenessProbe":{{"httpGet":{{"path":"/nonexistent-health-check"}}}}}}]}}}}}}}}'
-   Fix:    kubectl patch deployment/<deploy> -n <ns> -p '{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"<container>","livenessProbe":{{"httpGet":{{"path":"/health"}}}}}}]}}}}}}}}'
-   Symptoms: pod restarting every 30s, CrashLoopBackOff
+4. CRASHLOOP (bad command) — works on ANY deployment
+   Inject: kubectl patch deployment/<deploy> -n <ns> -p '{{"spec":{{"template":{{"spec":{{"containers":[{{"name":"<container>","command":["sh","-c","exit 1"]}}]}}}}}}}}'
+   Fix:    kubectl rollout restart deployment/<deploy> -n <ns>
+   Symptoms: CrashLoopBackOff, container exits immediately
 
-7. WRONG DATABASE CREDENTIALS / CONFIG
-   Inject: kubectl set env deployment/<deploy> -n <ns> POSTGRES_DB=wrong_db_name
-   Fix:    kubectl set env deployment/<deploy> -n <ns> POSTGRES_DB=<correct from healthy baseline>
-   Symptoms: app logs show "database not found" or authentication errors
+5. WRONG DATABASE URL — ONLY works on payment-worker
+   Inject: kubectl set env deployment/payment-worker -n payments DATABASE_URL=postgres://wrong-host.invalid:5432/payments
+   Fix:    kubectl set env deployment/payment-worker -n payments DATABASE_URL=postgres://payments_user:payments_pass@payment-db.payments.svc.cluster.local:5432/payments
+   Symptoms: payment-worker CrashLoopBackOff, "host not found" in logs
+
+IMPORTANT: Do NOT use env var faults (DB_HOST, PORT, POSTGRES_DB) on any deployment
+other than payment-worker — other deployments ignore unknown env vars and stay Running.
 
 STEP 4 — DESIGN THE INCIDENT
 
