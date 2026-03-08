@@ -357,7 +357,15 @@ class KubeSreGymEnvironment(Environment):
                 # by looking at action history + current cluster state.
                 # This catches cases where pods appear healthy but the actual
                 # fix was wrong (e.g., OOM flapping, wrong namespace).
-                cluster_snapshot = self.backend.execute("kubectl get pods --all-namespaces")
+                # Build snapshot from the health data we already confirmed
+                # (avoids race condition with a separate kubectl API call).
+                snapshot_lines = ["NAMESPACE    NAME    STATUS    RESTARTS    OOM"]
+                for ns, pods in health.items():
+                    for pname, info in pods.items():
+                        snapshot_lines.append(
+                            f"{ns}    {pname}    {info['status']}    {info['restarts']}    {info['oom_killed']}"
+                        )
+                cluster_snapshot = "\n".join(snapshot_lines)
                 judge_resolved, judge_reason = self.judge.verify_resolution(
                     self.scenario, self.history + [{"step": self._step_count,
                      "command": action.command, "output": output[:200]}],
