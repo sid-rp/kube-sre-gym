@@ -448,29 +448,37 @@ def plot_rewards(csv_path: Path, out_path: Path = None):
         logger.warning("No episodes to plot")
         return
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    fig, ax1 = plt.subplots(1, 1, figsize=(12, 6))
 
     # Rolling average
     window = min(10, len(episodes))
     def rolling_avg(vals):
         return [sum(vals[max(0,i-window):i+1]) / min(i+1, window) for i in range(len(vals))]
 
-    # Total reward
-    ax1.plot(episodes, totals, alpha=0.3, color="blue", label="Per episode")
-    ax1.plot(episodes, rolling_avg(totals), color="blue", linewidth=2, label=f"Rolling avg ({window})")
+    rolling = rolling_avg(totals)
+
+    # Total reward with rolling average
+    ax1.plot(episodes, totals, alpha=0.25, color="blue", marker="o", markersize=3, label="Per episode")
+    ax1.plot(episodes, rolling, color="blue", linewidth=2.5, label=f"Rolling avg ({window})")
+
+    # Trend line
+    import numpy as np
+    z = np.polyfit(episodes, totals, 1)
+    trend = np.poly1d(z)
+    ax1.plot(episodes, trend(episodes), color="red", linewidth=1.5, linestyle="--",
+             label=f"Trend ({'↑' if z[0] > 0 else '↓'} {abs(z[0]):.3f}/ep)")
+
     ax1.set_ylabel("Total Reward")
-    ax1.set_title("K8s SRE Agent — GRPO Training Rewards")
+    ax1.set_xlabel("Episode")
+    ax1.set_title("K8s SRE Agent — GRPO Training Reward Curve")
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     ax1.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
 
-    # Diagnosis vs Fix
-    ax2.plot(episodes, rolling_avg(diags), color="orange", linewidth=2, label="Diagnosis (rolling)")
-    ax2.plot(episodes, rolling_avg(fixes), color="green", linewidth=2, label="Fix (rolling)")
-    ax2.set_xlabel("Episode")
-    ax2.set_ylabel("Reward")
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    # Annotate stats
+    ax1.text(0.02, 0.02, f"Episodes: {len(episodes)} | Final avg: {rolling[-1]:.2f} | Best: {max(totals):.2f}",
+             transform=ax1.transAxes, fontsize=9, verticalalignment="bottom",
+             bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
 
     plt.tight_layout()
     save_path = out_path or csv_path.with_suffix(".png")
