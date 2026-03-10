@@ -21,7 +21,9 @@ Within 8 episodes, it learned to discover namespaces, read pod statuses, identif
 
 **This is Kube SRE Gym** — a self-improving environment where an RL agent learns to diagnose and fix real production Kubernetes failures through adversarial self-play, curriculum-driven difficulty, and GRPO.
 
-> **OpenEnv Hackathon Submission** | Built with [OpenEnv v0.2.1](https://github.com/meta-pytorch/OpenEnv/tree/v0.2.1) | Deployed on [HF Spaces](https://huggingface.co/spaces/openenv-community/kube-sre-gym) | Training via [HF TRL](https://github.com/huggingface/trl) in [Colab](kube_sre_gym_colab.ipynb)
+> **1st Place, OpenEnv Hackathon** (PyTorch + Cerebral Valley, $15K prize) | Built with [OpenEnv v0.2.1](https://github.com/meta-pytorch/OpenEnv/tree/v0.2.1) | Deployed on [HF Spaces](https://huggingface.co/spaces/openenv-community/kube-sre-gym) | Training via [HF TRL](https://github.com/huggingface/trl) in [Colab](kube_sre_gym_colab.ipynb)
+
+[![Hackathon Winner](https://raw.githubusercontent.com/sid-rp/kube-sre-gym/main/assets/hackathon_winner.png)](https://cerebralvalley.ai/e/openenv-hackathon-sf/hackathon/gallery)
 
 ---
 
