@@ -429,7 +429,7 @@ def plot_rewards(csv_path: Path, out_path: Path = None):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    episodes, totals, diags, fixes = [], [], [], []
+    episodes, totals, diags, fixes, stds = [], [], [], [], []
     with open(csv_path) as f:
         reader = __import__("csv").reader(f)
         next(reader)  # skip header
@@ -438,6 +438,7 @@ def plot_rewards(csv_path: Path, out_path: Path = None):
             totals.append(float(row[1]))
             diags.append(float(row[2]))
             fixes.append(float(row[3]))
+            stds.append(float(row[4]) if len(row) > 4 else 0.0)
 
     if not episodes:
         logger.warning("No episodes to plot")
@@ -559,14 +560,35 @@ def main() -> None:
 
     with open(reward_log_path, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["episode", "total_reward", "diagnosis_reward", "fix_reward", "timestamp"])
+        writer.writerow(["episode", "total_reward", "diagnosis_reward", "fix_reward",
+                         "reward_std", "num_steps", "resolved", "timestamp"])
 
-    def _log_episode(total_r: float, diag_r: float, fix_r: float):
+    # Track per-GRPO-step reward variance (collapse detection)
+    grpo_step_rewards = []  # rewards within current GRPO step (across num_generations)
+
+    def _log_episode(total_r: float, diag_r: float, fix_r: float,
+                     num_steps: int = 0, resolved: bool = False):
         episode_counter[0] += 1
         all_rewards.append(total_r)
+        grpo_step_rewards.append(total_r)
+
+        # Compute reward_std across rollouts in this GRPO step
+        # (resets every num_generations episodes)
+        reward_std = 0.0
+        if len(grpo_step_rewards) >= 2:
+            mean_r = sum(grpo_step_rewards) / len(grpo_step_rewards)
+            reward_std = (sum((r - mean_r) ** 2 for r in grpo_step_rewards)
+                          / len(grpo_step_rewards)) ** 0.5
+        if len(grpo_step_rewards) >= args.num_generations:
+            if reward_std < 0.1:
+                logger.warning(f"LOW REWARD VARIANCE: std={reward_std:.3f} across "
+                               f"{len(grpo_step_rewards)} rollouts — possible mode collapse")
+            grpo_step_rewards.clear()
+
         with open(reward_log_path, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([episode_counter[0], total_r, diag_r, fix_r,
+                             round(reward_std, 4), num_steps, resolved,
                              datetime.now().isoformat()])
 
         n = len(all_rewards)
@@ -577,7 +599,7 @@ def main() -> None:
 
         logger.info(
             f"Episode {episode_counter[0]}: reward={total_r:.2f} "
-            f"(diag={diag_r:.2f}, fix={fix_r:.2f}) | "
+            f"(diag={diag_r:.2f}, fix={fix_r:.2f}, std={reward_std:.2f}) | "
             f"mean={mean_all:.2f}, mean(10)={mean_10:.2f}, best={best:.2f}"
         )
 
@@ -604,7 +626,9 @@ def main() -> None:
             total_rewards.append(episode["total_reward"])
             diagnosis_rewards.append(episode["diagnosis_reward"])
             fix_rewards.append(episode["fix_reward"])
-            _log_episode(episode["total_reward"], episode["diagnosis_reward"], episode["fix_reward"])
+            _log_episode(episode["total_reward"], episode["diagnosis_reward"], episode["fix_reward"],
+                        num_steps=len(episode.get("logprobs", [])),
+                        resolved=episode["total_reward"] > 0)
 
         return {
             "prompt_ids": episode_prompt_ids,
