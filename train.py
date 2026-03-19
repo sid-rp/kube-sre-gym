@@ -131,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens per agent response (SRE commands are short)")
     parser.add_argument("--num-generations", type=int, default=8, help="G for GRPO (8+ recommended for stable advantage estimation)")
     parser.add_argument("--learning-rate", type=float, default=1e-6)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=8, help="Effective batch = this * per_device_batch_size")
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=-1, help="Max GRPO training steps (-1 = auto)")
     parser.add_argument("--save-steps", type=int, default=10)
@@ -527,8 +527,8 @@ def main() -> None:
         learning_rate=args.learning_rate,
         lr_scheduler_type="cosine",  # cosine decay works well with GRPO
         warmup_steps=5,  # 5 steps for optimizer stabilization (2 was too aggressive)
-        max_grad_norm=1.0,  # standard clipping (0.1 was too conservative)
-        gradient_accumulation_steps=8,  # large effective batch for stable GRPO signal
+        max_grad_norm=0.1,  # tight clipping — compensates for beta=0.0 (no KL regularization)
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
         per_device_train_batch_size=1,
         generation_batch_size=args.num_generations,
         num_generations=args.num_generations,
