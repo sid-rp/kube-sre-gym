@@ -14,12 +14,13 @@ Design principles (from ChaosEater, Chaos Mesh, Google SRE):
 
 import json
 import logging
+import os
 import random
 import time
 
 from .llm_client import LLMClient
 from .k8s_backend import K8sBackend
-from .constants import TOPOLOGY, HEALTHY_STATE
+from .constants import TOPOLOGY, HEALTHY_STATE, EVAL_HELD_OUT_COMBOS
 
 try:
     from ..models import AdversarialScenarioSpec, IncidentStep
@@ -273,11 +274,26 @@ class AdversarialDesigner:
         """Pick a simple single-fault scenario from the warmup pool.
 
         Prefers scenarios the agent hasn't solved yet, or ones it's weak at.
+        Respects train/eval split: EVAL_SPLIT=1 uses only held-out combos.
+        Training uses all deployments for diversity but skips held-out combos.
         """
+        # Filter warmup pool by held-out fault+deployment combos
+        if os.environ.get("EVAL_SPLIT"):
+            # Eval: only scenarios whose fault type + deployment is held out
+            # Warmup scenarios are all "adversarial" type, so match by the
+            # underlying fault pattern (oom in name → oom_kill, etc.)
+            base_pool = [s for s in WARMUP_SCENARIOS
+                         if self._warmup_matches_held_out(s)]
+        else:
+            # Train: exclude held-out combos, keep everything else
+            base_pool = [s for s in WARMUP_SCENARIOS
+                         if not self._warmup_matches_held_out(s)]
+        base_pool = base_pool if base_pool else WARMUP_SCENARIOS
+
         solved = set(skill_profile.keys()) if skill_profile else set()
         # Prefer unsolved scenarios
-        unsolved = [s for s in WARMUP_SCENARIOS if f"adversarial:{s['name']}" not in solved]
-        pool = unsolved if unsolved else WARMUP_SCENARIOS
+        unsolved = [s for s in base_pool if f"adversarial:{s['name']}" not in solved]
+        pool = unsolved if unsolved else base_pool
 
         # If there are weak spots, prefer scenarios targeting those failure types
         if skill_profile:
@@ -312,6 +328,27 @@ class AdversarialDesigner:
         logger.info(f"Warmup scenario selected: {scenario.name} (difficulty={difficulty:.2f})")
         return scenario
 
+    # Map warmup scenario names to fault types for held-out matching
+    _WARMUP_FAULT_MAP = {
+        "oom": "oom_kill", "bad-image": "image_pull", "crashloop": "crashloop",
+        "scaled-to-zero": "scale_zero", "wrong-database": "bad_config",
+    }
+
+    def _warmup_matches_held_out(self, scenario: dict) -> bool:
+        """Check if a warmup scenario matches any held-out combo."""
+        ns = scenario["namespace"]
+        dep = scenario["deployment"]
+        # Infer fault type from scenario name
+        name = scenario["name"]
+        fault_type = None
+        for pattern, ft in self._WARMUP_FAULT_MAP.items():
+            if pattern in name:
+                fault_type = ft
+                break
+        if fault_type is None:
+            return False
+        return (fault_type, ns, dep) in EVAL_HELD_OUT_COMBOS
+
     def _design_llm(self, skill_profile: dict, difficulty: float) -> AdversarialScenarioSpec:
         """Use the LLM to design a harder incident based on agent's skill gaps."""
         # Budget: reserve ~7 steps for triage+investigation+verify, leave rest for fixes
@@ -326,6 +363,8 @@ class AdversarialDesigner:
         cluster_state = self.backend.check_health()
         weak_spots = [k for k, v in skill_profile.items() if v < 0.5] if skill_profile else []
 
+        # LLM-designed scenarios use full topology for diversity.
+        # The held-out combo split only applies to warmup/simple scenarios.
         system_prompt = ADVERSARIAL_DESIGNER_PROMPT.format(
             topology=json.dumps(TOPOLOGY, indent=2),
             healthy_state=json.dumps(HEALTHY_STATE, indent=2),
@@ -349,6 +388,13 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
         try:
             data = self.llm.chat_json(system_prompt, user_prompt, temperature=0.7, max_tokens=2048)
             scenario = self._parse_scenario(data, difficulty)
+
+            # Validate the scenario is solvable within the step budget
+            solvable, reason = self._validate_solvability(scenario)
+            if not solvable:
+                logger.warning(f"LLM scenario unsolvable: {reason} — falling back")
+                return self._fallback_scenario(difficulty)
+
             logger.info(f"Adversarial scenario designed: {scenario.name} (difficulty={scenario.difficulty}, "
                         f"faults={len(scenario.steps)}, fix_steps={len(scenario.fix_steps)})")
             return scenario
@@ -434,6 +480,19 @@ Previously solved scenarios: {list(skill_profile.keys()) if skill_profile else "
 
         scenario._inject_success_count = success_count
         return "\n".join(results)
+
+    def _validate_solvability(self, scenario: AdversarialScenarioSpec) -> tuple[bool, str]:
+        """Check if scenario is solvable within the step budget.
+
+        Each fault needs roughly: 1 triage + 1-2 investigate + 1 fix + 1 verify = 4-5 steps.
+        Plus 2 steps for initial discovery (kubectl get pods -A, etc.).
+        """
+        min_steps_needed = len(scenario.fix_steps) * 5 + 2
+        budget = self.max_steps
+        if min_steps_needed > budget * 0.8:  # 80% budget margin
+            return False, (f"Needs ~{min_steps_needed} steps, budget is {budget} "
+                           f"(80% margin = {int(budget * 0.8)})")
+        return True, "OK"
 
     def _parse_scenario(self, data: dict, difficulty: float) -> AdversarialScenarioSpec:
         """Convert LLM JSON response into AdversarialScenarioSpec.

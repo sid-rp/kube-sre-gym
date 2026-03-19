@@ -316,6 +316,56 @@ def evaluate_model(
 # Comparison table & plotting
 # ============================================================
 
+def compute_bootstrap_ci(values: list[float], confidence: float = 0.95, n_bootstrap: int = 10000) -> tuple[float, float]:
+    """Bootstrap confidence interval for the mean."""
+    import numpy as np
+    if not values:
+        return 0.0, 0.0
+    arr = np.array(values)
+    boot_means = [np.mean(np.random.choice(arr, size=len(arr), replace=True))
+                  for _ in range(n_bootstrap)]
+    lower = np.percentile(boot_means, (1 - confidence) / 2 * 100)
+    upper = np.percentile(boot_means, (1 + confidence) / 2 * 100)
+    return float(lower), float(upper)
+
+
+def compute_statistical_comparison(base_rewards: list[float], trained_rewards: list[float]) -> dict:
+    """Statistical comparison with t-test and Cohen's d effect size."""
+    import numpy as np
+    from scipy import stats
+
+    t_stat, p_value = stats.ttest_ind(trained_rewards, base_rewards)
+    pooled_std = np.sqrt((np.std(base_rewards)**2 + np.std(trained_rewards)**2) / 2)
+    cohens_d = (np.mean(trained_rewards) - np.mean(base_rewards)) / pooled_std if pooled_std > 0 else 0.0
+    return {"t_stat": float(t_stat), "p_value": float(p_value), "cohens_d": float(cohens_d)}
+
+
+def print_per_fault_breakdown(results: list[dict], label: str):
+    """Print per-fault-type performance breakdown."""
+    by_fault = {}
+    for r in results:
+        # Try to extract fault type from commands or scenario info
+        fault_type = r.get("fault_type", "unknown")
+        if fault_type not in by_fault:
+            by_fault[fault_type] = {"rewards": [], "steps": [], "resolved": 0, "total": 0}
+        by_fault[fault_type]["rewards"].append(r.get("total_reward", 0))
+        by_fault[fault_type]["steps"].append(r.get("steps_taken", 0))
+        by_fault[fault_type]["total"] += 1
+        if r.get("resolved"):
+            by_fault[fault_type]["resolved"] += 1
+
+    if len(by_fault) <= 1 and "unknown" in by_fault:
+        return  # no fault type info available
+
+    print(f"\n--- Per-Fault Breakdown ({label}) ---")
+    for ft, data in sorted(by_fault.items()):
+        avg_reward = sum(data["rewards"]) / len(data["rewards"]) if data["rewards"] else 0
+        avg_steps = sum(data["steps"]) / len(data["steps"]) if data["steps"] else 0
+        rate = data["resolved"] / data["total"] if data["total"] > 0 else 0
+        print(f"  {ft}: resolve_rate={rate:.0%}, avg_reward={avg_reward:.2f}, "
+              f"avg_steps={avg_steps:.1f}, n={data['total']}")
+
+
 def print_comparison(base_results: list[dict], trained_results: list[dict]):
     """Print a side-by-side comparison table."""
     try:
@@ -378,6 +428,64 @@ def print_comparison(base_results: list[dict], trained_results: list[dict]):
             print(" | ".join(str(c) for c in row))
 
     print()
+
+
+def plot_eval_reward_curves(base_results: list[dict], trained_results: list[dict], out_path: str):
+    """Plot reward vs episode curves for eval (similar to training reward curves)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+
+    def _plot_model(results, label, color):
+        if not results:
+            return
+        episodes = [r["episode"] for r in results]
+        rewards = [r["total_reward"] for r in results]
+        window = min(5, len(episodes))
+
+        # Per-episode scatter
+        ax.plot(episodes, rewards, alpha=0.3, color=color, marker="o", markersize=4)
+        # Rolling average
+        rolling = [sum(rewards[max(0, i - window):i + 1]) / min(i + 1, window)
+                   for i in range(len(rewards))]
+        ax.plot(episodes, rolling, color=color, linewidth=2.5, label=f"{label} (rolling avg {window})")
+        # Trend
+        z = np.polyfit(episodes, rewards, 1)
+        trend = np.poly1d(z)
+        ax.plot(episodes, trend(episodes), color=color, linewidth=1, linestyle="--", alpha=0.6)
+
+    _plot_model(base_results, "Base", "#4C72B0")
+    if trained_results:
+        _plot_model(trained_results, "Trained", "#55A868")
+
+    ax.set_xlabel("Episode")
+    ax.set_ylabel("Total Reward")
+    ax.set_title("Eval Reward vs Episode (Validation Split)")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.axhline(y=0, color="gray", linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150)
+    plt.close()
+    logger.info(f"Eval reward curve saved to {out_path}")
+
+
+def save_eval_csv(results: list[dict], label: str, out_path: str):
+    """Save per-episode eval results to CSV for downstream plotting."""
+    import csv
+    with open(out_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["episode", "total_reward", "steps_taken", "resolved", "elapsed_s", "model"])
+        for r in results:
+            writer.writerow([
+                r.get("episode", 0), r.get("total_reward", 0), r.get("steps_taken", 0),
+                r.get("resolved", False), r.get("elapsed_s", 0), label,
+            ])
+    logger.info(f"Eval CSV saved to {out_path}")
 
 
 def plot_comparison(base_results: list[dict], trained_results: list[dict], out_path: str):
@@ -459,8 +567,8 @@ def parse_args() -> argparse.Namespace:
                         help="Path to trained LoRA checkpoint dir (e.g. outputs/.../checkpoint-8)")
     parser.add_argument("--env-url", default="http://localhost:8000",
                         help="OpenEnv server URL (default: http://localhost:8000)")
-    parser.add_argument("--num-eval-episodes", type=int, default=5,
-                        help="Number of eval episodes per model (default: 5)")
+    parser.add_argument("--num-eval-episodes", type=int, default=30,
+                        help="Number of eval episodes per model (default: 30, minimum for statistical significance)")
     parser.add_argument("--max-turns", type=int, default=15,
                         help="Max agent turns per episode (default: 15)")
     parser.add_argument("--output-dir", default=".",
@@ -506,7 +614,7 @@ def main():
             max_model_len=4096,
             gpu_memory_utilization=args.gpu_memory_utilization,
             enable_lora=True,
-            max_lora_rank=16,
+            max_lora_rank=64,  # support LoRA ranks up to 64 (default training is 32)
         )
     else:
         llm = LLM(
@@ -547,6 +655,30 @@ def main():
     # ---- Print comparison ----
     if trained_results:
         print_comparison(base_results, trained_results)
+
+        # Statistical comparison with confidence intervals
+        base_rewards = [r["total_reward"] for r in base_results]
+        trained_rewards = [r["total_reward"] for r in trained_results]
+
+        base_ci = compute_bootstrap_ci(base_rewards)
+        trained_ci = compute_bootstrap_ci(trained_rewards)
+        print(f"\n--- 95% Confidence Intervals ---")
+        print(f"  Base:    mean={sum(base_rewards)/len(base_rewards):.3f}, CI=[{base_ci[0]:.3f}, {base_ci[1]:.3f}]")
+        print(f"  Trained: mean={sum(trained_rewards)/len(trained_rewards):.3f}, CI=[{trained_ci[0]:.3f}, {trained_ci[1]:.3f}]")
+
+        try:
+            stats_result = compute_statistical_comparison(base_rewards, trained_rewards)
+            print(f"\n--- Statistical Test ---")
+            print(f"  t-statistic: {stats_result['t_stat']:.3f}")
+            print(f"  p-value:     {stats_result['p_value']:.4f} {'(significant)' if stats_result['p_value'] < 0.05 else '(not significant)'}")
+            print(f"  Cohen's d:   {stats_result['cohens_d']:.3f} "
+                  f"({'small' if abs(stats_result['cohens_d']) < 0.5 else 'medium' if abs(stats_result['cohens_d']) < 0.8 else 'large'} effect)")
+        except ImportError:
+            logger.warning("scipy not installed — skipping statistical tests")
+
+        # Per-fault breakdown
+        print_per_fault_breakdown(base_results, "BASE")
+        print_per_fault_breakdown(trained_results, "TRAINED")
     else:
         logger.info("\nBase model only (no trained checkpoint provided):")
         for r in base_results:
@@ -578,20 +710,51 @@ def main():
         },
     }
 
+    # Add confidence intervals and statistical tests to saved results
+    if trained_results:
+        base_rewards = [r["total_reward"] for r in base_results]
+        trained_rewards = [r["total_reward"] for r in trained_results]
+        base_ci = compute_bootstrap_ci(base_rewards)
+        trained_ci = compute_bootstrap_ci(trained_rewards)
+        all_results["confidence_intervals"] = {
+            "base_95ci": list(base_ci),
+            "trained_95ci": list(trained_ci),
+        }
+        try:
+            all_results["statistical_tests"] = compute_statistical_comparison(base_rewards, trained_rewards)
+        except ImportError:
+            pass
+
     results_path = out_dir / "eval_results.json"
     with open(results_path, "w") as f:
         json.dump(all_results, f, indent=2)
     logger.info(f"Results saved to {results_path}")
 
+    # ---- Save CSVs ----
+    try:
+        save_eval_csv(base_results, "base", str(out_dir / "eval_base.csv"))
+        if trained_results:
+            save_eval_csv(trained_results, "trained", str(out_dir / "eval_trained.csv"))
+    except Exception as e:
+        logger.warning(f"Could not save eval CSVs: {e}")
+
     # ---- Plot ----
+    try:
+        # Reward curve (reward vs episode)
+        curve_path = out_dir / "eval_reward_curves.png"
+        plot_eval_reward_curves(base_results, trained_results, str(curve_path))
+    except Exception as e:
+        logger.warning(f"Could not generate reward curve: {e}")
+
     if trained_results:
         try:
+            # Bar chart comparison
             plot_path = out_dir / "eval_results.png"
             plot_comparison(base_results, trained_results, str(plot_path))
         except Exception as e:
-            logger.warning(f"Could not generate plot: {e}")
+            logger.warning(f"Could not generate comparison plot: {e}")
     else:
-        logger.info("Skipping plot (no trained model to compare)")
+        logger.info("Skipping comparison plot (no trained model)")
 
     # ---- Print final summary ----
     logger.info("\n" + "=" * 60)

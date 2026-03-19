@@ -83,13 +83,14 @@ class CurriculumController:
                         f"starting at tier={self.get_tier_name()}")
 
     def record(self, failure_type: str, success: bool, steps: int, reward: float):
-        """Record episode outcome and check for mastery graduation."""
+        """Record episode outcome and check for mastery graduation or demotion."""
         self.history[failure_type].append(success)
         self.step_counts[failure_type].append(steps)
         self.episode_rewards.append(reward)
         self.episode_count += 1
         self._tier_episodes += 1
         self._maybe_advance_tier()
+        self._maybe_demote_tier()
 
         # Check if this fault type is now mastered
         recent = self.history[failure_type][-MASTERY_WINDOW:]
@@ -126,6 +127,36 @@ class CurriculumController:
                         f"{', FAST-TRACK' if fast_track else ''})")
             self._tier_index += 1
             self._tier_episodes = 0
+
+    # Demotion: if agent struggles badly at current tier, step back
+    DEMOTION_THRESHOLD = 0.25  # below 25% success over last 5 episodes
+    DEMOTION_WINDOW = 5
+
+    def _maybe_demote_tier(self):
+        """Demote to a lower tier if the agent is consistently failing.
+
+        Prevents the agent from being stuck at a difficulty level it can't handle.
+        Only demotes if there are enough episodes to judge (DEMOTION_WINDOW).
+        """
+        if self._tier_index <= 0:
+            return  # already at lowest tier
+        if self._tier_episodes < self.DEMOTION_WINDOW:
+            return  # not enough episodes at this tier yet
+
+        recent = self.episode_rewards[-self.DEMOTION_WINDOW:]
+        # Count successes from the recent history across all fault types
+        all_recent = [r for results in self.history.values() for r in results[-self.DEMOTION_WINDOW:]]
+        if not all_recent:
+            return
+        success_rate = sum(1 for r in all_recent if r) / len(all_recent)
+
+        if success_rate < self.DEMOTION_THRESHOLD:
+            old_tier = DIFFICULTY_TIERS[self._tier_index]["name"]
+            self._tier_index -= 1
+            self._tier_episodes = 0
+            logger.info(f"Curriculum: DEMOTED from {old_tier} to "
+                        f"{DIFFICULTY_TIERS[self._tier_index]['name']} "
+                        f"(success_rate={success_rate:.0%} < {self.DEMOTION_THRESHOLD:.0%})")
 
     def _recent_success_rate(self, window: int = 10) -> float:
         """Success rate over the last `window` episodes across all failure types."""

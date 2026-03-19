@@ -128,9 +128,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--env-url", default="http://localhost:8000", help="OpenEnv server URL")
     parser.add_argument("--dataset-size", type=int, default=50, help="Number of training episodes")
     parser.add_argument("--max-turns", type=int, default=15, help="Max commands per episode")
-    parser.add_argument("--max-new-tokens", type=int, default=512, help="Max tokens per agent response")
+    parser.add_argument("--max-new-tokens", type=int, default=256, help="Max tokens per agent response (SRE commands are short)")
     parser.add_argument("--num-generations", type=int, default=8, help="G for GRPO (8+ recommended for stable advantage estimation)")
-    parser.add_argument("--learning-rate", type=float, default=2e-6)
+    parser.add_argument("--learning-rate", type=float, default=1e-6)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--max-steps", type=int, default=-1, help="Max GRPO training steps (-1 = auto)")
@@ -146,9 +146,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.5, help="vLLM GPU memory fraction (0.0-1.0)")
     parser.add_argument("--temperature", type=float, default=1.0)  # T=1.0 optimal for GRPO exploration
     parser.add_argument("--logging-steps", type=int, default=1)
-    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
-    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha (typically 2x rank)")
-    parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout")
+    parser.add_argument("--lora-r", type=int, default=32, help="LoRA rank (higher = more capacity)")
+    parser.add_argument("--lora-alpha", type=int, default=64, help="LoRA alpha (typically 2x rank)")
+    parser.add_argument("--lora-dropout", type=float, default=0.1, help="LoRA dropout (regularization)")
     parser.add_argument("--report-to", default="none", choices=("tensorboard", "wandb", "none"),
                         help="Logging backend for reward curves (default: none, uses CSV instead)")
     parser.add_argument("--reward-log", default="reward_log.csv",
@@ -526,7 +526,7 @@ def main() -> None:
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         lr_scheduler_type="cosine",  # cosine decay works well with GRPO
-        warmup_steps=2,
+        warmup_steps=5,  # 5 steps for optimizer stabilization (2 was too aggressive)
         max_grad_norm=1.0,  # standard clipping (0.1 was too conservative)
         gradient_accumulation_steps=8,  # large effective batch for stable GRPO signal
         per_device_train_batch_size=1,
@@ -547,7 +547,7 @@ def main() -> None:
         # DAPO-style improvements over vanilla GRPO:
         loss_type="dapo",  # asymmetric clipping + dynamic sampling
         mask_truncated_completions=True,  # exclude token-capped episodes from loss
-        beta=0.01,  # lighter KL penalty — model needs to diverge from base
+        beta=0.0,  # no KL penalty — DAPO clipping handles stability, KL hurts on verifiable rewards
     )
 
     # ---- Reward CSV logger ----
@@ -622,7 +622,7 @@ def main() -> None:
         lora_dropout=args.lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
 
     # ---- Trainer ----

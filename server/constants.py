@@ -15,6 +15,20 @@ TOPOLOGY = {
 
 APP_NAMESPACES = ["payments", "frontend", "auth", "hackathon"]
 
+# ---- Train/Eval split by fault+deployment COMBINATIONS ----
+# Training uses ALL deployments for diversity. Eval holds out specific
+# (fault_type, deployment) combos the agent has never seen together.
+# This tests generalization: can the agent apply learned fault-fixing
+# skills to unseen combinations?
+# Set EVAL_SPLIT=1 env var to restrict to held-out combos only.
+EVAL_HELD_OUT_COMBOS = {
+    # (fault_type, namespace, deployment) — never seen together during training
+    ("oom_kill", "auth", "auth-service"),
+    ("image_pull", "payments", "payment-gateway"),
+    ("scale_zero", "frontend", "frontend-cache"),
+    ("bad_config", "payments", "payment-worker"),  # bad_config only works on payment-worker anyway
+}
+
 DEFAULT_NAMESPACE = "default"
 MAX_STEPS = 15
 

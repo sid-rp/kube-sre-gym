@@ -260,12 +260,21 @@ class KubeSreGymEnvironment(Environment):
         else:
             output = "error: only kubectl commands, 'diagnose: <text>', and 'fix: kubectl <cmd>' are supported."
 
-        # Penalize repeated commands — escalating penalty + circuit breaker at 3x
+        # Penalize repeated commands — split by command type:
+        # Diagnostic commands (get/describe/logs/top) are legitimately repeated
+        # (e.g., checking cluster state after a fix), so they get lighter penalties
+        # and are never circuit-broken. Mutation commands get strict penalties.
+        _DIAGNOSTIC_VERBS = {"get", "describe", "logs", "top"}
         repeat_count = sum(1 for h in self.history if h["command"] == action.command)
         persona = self.curriculum.get_judge_persona()
 
-        if repeat_count >= 2:
-            # Circuit breaker: block after 2 repeats, override output with hint
+        # Determine if this is a diagnostic or mutation command
+        cmd_parts = exec_cmd.split() if exec_cmd else []
+        cmd_verb = cmd_parts[1] if len(cmd_parts) >= 2 and cmd_parts[0] == "kubectl" else ""
+        is_diagnostic_cmd = cmd_verb in _DIAGNOSTIC_VERBS or is_diagnose
+
+        if not is_diagnostic_cmd and repeat_count >= 2:
+            # Circuit breaker: block mutations after 2 repeats
             output = (f"BLOCKED: You already tried this command {repeat_count + 1} times. "
                       "Try a different approach or check a different namespace.")
             reward = -0.5
@@ -276,8 +285,17 @@ class KubeSreGymEnvironment(Environment):
             )
 
         if repeat_count == 1:
-            reward -= 0.3
-            feedback += " Repeated command (2x) — try a different approach."
+            if is_diagnostic_cmd:
+                # Diagnostic: lighter penalty, no circuit breaker
+                reward -= 0.1
+            else:
+                # Mutation: strict penalty on first repeat (second repeat is blocked above)
+                reward -= 0.3
+                feedback += " Repeated command (2x) — try a different approach."
+        elif repeat_count >= 2 and is_diagnostic_cmd:
+            # Diagnostic: escalating penalty but never blocked
+            reward -= 0.1 * repeat_count  # 3rd: -0.2, 4th: -0.3, etc.
+            feedback += f" Diagnostic repeated {repeat_count + 1}x — consider a different command."
 
         # Log AFTER all reward adjustments so the displayed reward matches reality
         logger.info(f"    -> reward={reward:.2f} | {feedback[:80]}")
@@ -373,23 +391,34 @@ class KubeSreGymEnvironment(Environment):
                 if judge_resolved:
                     done = True
                     difficulty = self.curriculum.get_difficulty()
-                    base_bonus = 1.0 + difficulty * 2.0
-                    efficiency = base_bonus + 2.0 * (1.0 - self._step_count / self.max_steps)
-                    reward += efficiency
-                    feedback = f"Incident resolved! All pods healthy. (bonus: +{efficiency:.1f})"
+                    # Quadratic efficiency scaling: fast solves rewarded more steeply
+                    # Wider difficulty multiplier so hard problems are worth more
+                    base_bonus = 1.0 + difficulty * 3.0
+                    efficiency_ratio = 1.0 - (self._step_count / self.max_steps)
+                    efficiency_bonus = 3.0 * efficiency_ratio ** 2
+                    resolution_bonus = base_bonus + efficiency_bonus
+                    reward += resolution_bonus
+                    feedback = f"Incident resolved! All pods healthy. (bonus: +{resolution_bonus:.1f})"
                 else:
-                    feedback += f" Pods appear healthy but fix not confirmed: {judge_reason}"
+                    # Partial credit: pods look healthy but not all faults confirmed fixed
+                    # Give a small bonus so GRPO gets useful gradient signal
+                    partial_bonus = 0.5
+                    reward += partial_bonus
+                    feedback += (f" Pods appear healthy but fix not confirmed: {judge_reason}"
+                                 f" (partial credit: +{partial_bonus:.1f})")
             else:
                 # Partial progress feedback — tell agent how many pods are healthy
                 feedback += f" Fix applied. {healthy_count}/{expected_pods} expected pods healthy."
 
         if self._step_count >= self.max_steps:
             done = True
-            # Wipe out accumulated per-step rewards — failed episode should be net negative.
-            # This ensures GRPO gets a clear negative signal for unresolved incidents.
+            # Graduated timeout: agents that made progress get less harsh penalty
+            # than agents that did nothing. This preserves useful gradient signal.
             raw_sum = sum(h["reward"] for h in self.history) + reward
-            reward -= raw_sum + 2.0  # net total will be -2.0
-            feedback = "Timeout -- incident remains unresolved."
+            progress_ratio = min(1.0, max(0.0, raw_sum) / max(1.0, 5.0))  # capped at 1.0, normalized against typical good episode
+            timeout_penalty = 2.0 * (1.0 - progress_ratio * 0.5)  # range: -1.0 to -2.0
+            reward -= raw_sum + timeout_penalty  # net total will be -timeout_penalty
+            feedback = f"Timeout -- incident remains unresolved. (penalty: -{timeout_penalty:.1f})"
 
         self.history.append({
             "step": self._step_count,

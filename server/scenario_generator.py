@@ -1,8 +1,9 @@
 import json
 import logging
+import os
 import random
 from .llm_client import LLMClient
-from .constants import INJECTABLE_FAILURES, TOPOLOGY
+from .constants import INJECTABLE_FAILURES, TOPOLOGY, EVAL_HELD_OUT_COMBOS
 
 try:
     from ..models import ScenarioSpec
@@ -108,9 +109,24 @@ class ScenarioGenerator:
 
     def _generate_simple(self, skill_profile: dict, difficulty: float,
                          fault_type_hint: str = None) -> ScenarioSpec:
-        candidates = [s for s in SCENARIO_POOL if s.difficulty <= difficulty + 0.2]
+        # Train/eval split by fault+deployment combos (not entire deployments).
+        # Training uses all deployments for diversity but excludes held-out combos.
+        # Eval (EVAL_SPLIT=1) uses ONLY the held-out combos.
+        pool = SCENARIO_POOL
+        if os.environ.get("EVAL_SPLIT"):
+            pool = [s for s in SCENARIO_POOL
+                    if (s.failure_type, s.namespace, s.deployment) in EVAL_HELD_OUT_COMBOS]
+            if not pool:
+                pool = SCENARIO_POOL  # fallback
+        else:
+            pool = [s for s in SCENARIO_POOL
+                    if (s.failure_type, s.namespace, s.deployment) not in EVAL_HELD_OUT_COMBOS]
+            if not pool:
+                pool = SCENARIO_POOL  # fallback if everything is held out
+
+        candidates = [s for s in pool if s.difficulty <= difficulty + 0.2]
         if not candidates:
-            candidates = SCENARIO_POOL[:3]
+            candidates = pool[:3] if len(pool) >= 3 else pool
 
         # If curriculum gave us a specific fault type, prefer it
         if fault_type_hint:
