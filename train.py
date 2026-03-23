@@ -550,6 +550,9 @@ def main() -> None:
         beta=0.0,  # no KL penalty — DAPO clipping handles stability (DAPO)
         scale_rewards="none",  # no reward std normalization — removes difficulty bias (Dr.GRPO)
         mask_truncated_completions=True,  # exclude token-capped episodes from loss (Compact Filtering)
+        epsilon_high=0.28,  # looser upper clip for exploration (DAPO paper recommendation)
+        disable_dropout=True,  # consistent logprobs between generation and training
+        log_completions=True,  # log (prompt, completion) pairs for debugging
     )
 
     # ---- Reward CSV logger ----
