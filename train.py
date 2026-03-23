@@ -545,10 +545,11 @@ def main() -> None:
         hub_model_id=args.hub_repo if args.push_to_hub else None,
         hub_strategy="every_save",  # push each checkpoint to HF, not just final
         save_total_limit=3,  # keep last 3 checkpoints to save disk
-        # DAPO-style improvements over vanilla GRPO:
-        loss_type="dapo",  # asymmetric clipping + dynamic sampling
-        mask_truncated_completions=True,  # exclude token-capped episodes from loss
-        beta=0.0,  # no KL penalty — DAPO clipping handles stability, KL hurts on verifiable rewards
+        # GRPO+ (DeepSWE / DAPO / Dr.GRPO combined):
+        loss_type="dapo",  # asymmetric clipping + dynamic sampling (DAPO)
+        beta=0.0,  # no KL penalty — DAPO clipping handles stability (DAPO)
+        scale_rewards="none",  # no reward std normalization — removes difficulty bias (Dr.GRPO)
+        mask_truncated_completions=True,  # exclude token-capped episodes from loss (Compact Filtering)
     )
 
     # ---- Reward CSV logger ----
